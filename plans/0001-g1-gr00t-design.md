@@ -47,8 +47,13 @@ reference), ../inspect-robots-yam.
   (1 = open house convention), mirroring GR00T's own G1 config where
   "hands are controlled by binary signals like a gripper":
   - `dex1` (gripper): `rt/dex1/left|right/cmd`, `MotorCmds_`; scalar maps
-    to the 0-5.4 rad stroke with the 0.18 rad-per-cycle rate limit from
-    xr_teleoperate baked into the driver.
+    to the 0-5.4 rad stroke, rate-limited in rad/s
+    (`dex1_max_speed=2.7` default, a conservative 2 s full stroke;
+    xr_teleoperate's 0.18 rad/cycle at 250 Hz is 45 rad/s, so ours is
+    deliberately far under it); per-publish deltas are derived from the
+    publish rate. The claimed 1=open -> 0.0 rad mapping is flagged in
+    the README as bench-verify-before-first-grasp (polarity unproven
+    from public sources).
   - `dex3` (three-finger): `rt/dex3/left|right/cmd`, `HandCmd_` (7
     motors); scalar drives a power-grasp curl interpolating each joint
     between its open and closed reference pose (constants transcribed
@@ -65,21 +70,45 @@ reference), ../inspect-robots-yam.
   GR00T policy port, and both are config). Lazy imports: `zmq`, `cv2`
   (JPEG decode).
 - **Policy: `gr00t`** speaking the Isaac-GR00T PolicyServer wire protocol
-  (ZMQ REQ/REP, msgpack-numpy payloads, default port 5555). The protocol
-  is implemented directly with lazily imported `pyzmq` + `msgpack` +
-  `msgpack_numpy` rather than depending on the Isaac-GR00T package (a
-  full training repo). The GR00T UNITREE_G1 embodiment emits
-  **RELATIVE arm deltas and ABSOLUTE hand signals**: the policy
-  integrates arm deltas to absolute targets anchored at the observed
-  joints (franka's velocity-integration pattern: cumulative sum, no
-  scale factor, `actions_are_relative=True` default with pass-through
-  when False for absolute fine-tunes), and passes hand slots through.
-  The exact obs/action key layout of a served checkpoint depends on its
-  modality config: the adapter's wire formatting (`ego_view` image key,
-  state dict split into `left_arm/right_arm/left_hand/right_hand`) is
-  config-templated and the README explains how to match a fine-tune's
-  modality json. UnifoLM-VLA and lerobot-served policies are future
-  backends (README mentions them; no code in v1).
+  (ZMQ REQ/REP, msgpack-numpy payloads, default port 5555), implemented
+  directly with lazily imported `pyzmq` + `msgpack` + `msgpack_numpy`
+  (no Isaac-GR00T dependency). Verified wire facts (hardcode; cite
+  server_client.py / gr00t_policy.py at a pinned ref):
+  - Request envelope `{"endpoint": "get_action", "data": {"observation":
+    ..., "options": ...}}`; reply is an `(action, info)` LIST; action
+    arrays are `(B, T, D)`.
+  - Observations are NESTED dicts `{"video": {...}, "state": {...},
+    "language": {...}}` with strict asserts: video `(B,T,H,W,C)` uint8,
+    state `(B,T,D)` float32, language key
+    `annotation.human.task_description`. The adapter batches as
+    `(1, 1, ...)` and casts dtypes.
+  - The G1 configs require state keys `left_leg, right_leg, waist,
+    left_arm, right_arm, left_hand, right_hand`, and the arm-relative
+    config RETURNS extra action keys (`waist`, `base_height_command`,
+    `navigate_command`): extra returned keys are ignored by
+    construction.
+  - **Relative-vs-absolute (safety-critical, verified):** the current
+    N1.7 PolicyServer converts relative arm actions to absolute
+    SERVER-SIDE (`decode_action` undoes normalization and relativity),
+    so wire actions from a stock server are already absolute radians.
+    Default `actions_are_relative=False` (pass-through). The True path
+    exists only for older/custom servers that return anchor-relative
+    offsets, and its math is ANCHOR-ADD PER ELEMENT (`obs_arm + rel[i]`
+    for each chunk row independently), NEVER cumulative summation:
+    GR00T relativity is anchored to the last state timestep per row,
+    and cumsum would compound offsets into runaway targets. A
+    hand-computed anchor-add test locks this. The README carries a
+    prominent warning: verify which convention your server version
+    emits, slow-jog first, e-stop staffed.
+  - Wire templating: the obs builder maps each required wire state key
+    to a source: a packed-16D slice (`left_arm`, `right_arm`), a scalar
+    hand expansion, a LOWSTATE PASSTHROUGH (`left_leg`, `right_leg`,
+    `waist`: the embodiment already subscribes rt/lowstate and exposes
+    these as additional StateFields, which conformance permits since
+    exactly one field is (16,)), or a constant fill. Scalar-to-N-D hand
+    expansion uses packing.py's open/closed reference poses (Dex3) or
+    the 1-D stroke map (Dex1). UnifoLM-VLA and lerobot-served policies
+    are future backends (README mentions them; no code in v1).
 - **Out of scope v1**: locomotion/waist/neck control, 23-DOF arm
   support, per-joint hand actions, UnifoLM-VLA client, lerobot backend,
   GR00T-SONIC latent-action mode, sim backends.
@@ -104,12 +133,18 @@ reference), ../inspect-robots-yam.
   maps it to GR00T's `ego_view`).
 - `control_hz=10.0` with **intra-step streaming** at `stream_hz=50.0`
   (arm_sdk's documented consumer rate): `step()` publishes
-  `stream_hz/control_hz` linearly interpolated micro-commands per step,
+  `n = ceil(stream_hz/control_hz)` linearly interpolated micro-commands
+  per step, anchored at the LAST PUBLISHED command (first step: the
+  post-homing seed; the baseline is re-seeded from the observed pose at
+  every connect/reset),
   each delta-capped at `max_joint_speed/stream_hz` (default
   `max_joint_speed=3.0` rad/s, deliberately far under xr_teleoperate's
   20 rad/s clip), paced by injected clock/sleep, kp/kd from config
-  (defaults 60/1.5 arms, wrist gains lower per xr_teleoperate practice;
-  exact defaults transcribed and cited). Same synchronous-interpolation
+  (defaults 60/1.5 arms per the official 50 Hz example; a lower wrist
+  gain option exists as config, marked as bench-tuned defaults, not
+  citations: the official example uses uniform gains and xr_teleoperate
+  uses 80/3 + 40/1.5 at 250 Hz, so our combination is our own
+  conservative choice). Same synchronous-interpolation
   design as the A2 plan: no background threads, fully fake-testable.
 - Policy `control_hz=None`; embodiment declares `SELF_PACED`.
 
@@ -129,9 +164,13 @@ reference), ../inspect-robots-yam.
     the README says so.
 - **Crash backstop**: there is no documented firmware watchdog on
   arm_sdk; a dead publisher with weight=1 leaves the controller holding
-  the last command. The embodiment registers an `atexit` hook (injected
-  `atexit_module` seam for tests) on connect that runs the close
-  choreography, and unregisters it on clean close. README additionally
+  the last command. The embodiment registers an `atexit` hook AND a
+  SIGTERM handler (injected `atexit_module` and `signal_module` seams
+  for tests; the previous SIGTERM handler is chained and restored on
+  clean close) on connect that run the close choreography, and
+  unregisters both on clean close. atexit alone does not cover SIGTERM,
+  and SIGKILL is uncoverable: the README documents that residual gap
+  next to the no-watchdog warning. README additionally
   documents the operator-level e-stop (remote L1+A = damping mode; the
   robot goes limp and sinks) and requires an operator in reach for every
   attended run.
@@ -184,7 +223,7 @@ asymmetric values.
   `max_joint_speed=3.0`, `weight_ramp_s=2.0`, `kp_arm=60.0`,
   `kd_arm=1.5`, `kp_wrist`, `kd_wrist` (cited defaults),
   `joint_low/joint_high`, `home_pose`, `rest_pose=None`,
-  `dex1_stroke=5.4`, `dex1_rate_limit=0.18`, `hand_kp/hand_kd` (cited),
+  `dex1_stroke=5.4`, `dex1_max_speed=2.7` (rad/s), `hand_kp/hand_kd`,
   `cam_server_address="tcp://192.168.123.164:5556"`, `cam_timeout_s=5.0`,
   `unattended=False`, `docs_extra=""`. Post-init validation throughout.
 - `Gr00tConfig` (frozen): `host="127.0.0.1"`, `port=5555`,
@@ -230,20 +269,34 @@ asymmetric values.
 
 - `Gr00tPolicy(config=None, *, infer_fn=None, clock=None, **flat)`,
   entry point `gr00t`. `act()`: require `head_cam` + `joint_pos` state
-  -> build wire obs per the config templates (image under
-  `image_key`, state split per `state_keys`) -> `infer_fn(obs) ->
-  mapping of action arrays` -> reassemble per `action_keys` into
-  (N, 16) -> validate shapes/finiteness -> arm-delta integration when
-  `actions_are_relative` (cumsum anchored at observed arm joints; hand
-  slots never integrated) -> truncate to `action_horizon` ->
+  -> build the NESTED wire obs (video/state/language groups, (1,1,...)
+  batching, dtype casts, filler/lowstate keys per the template) ->
+  `infer_fn(obs) -> mapping of (B,T,D) action arrays` (envelope and
+  (action, info) unwrap live in the transport) -> select our action
+  keys, IGNORE extra returned keys -> reassemble into (N, 16) ->
+  validate shapes/finiteness -> when `actions_are_relative=True` (NOT
+  the default), anchor-add per element (`obs_arm + rel[i]`, no cumsum;
+  hand slots never touched) -> truncate to `action_horizon` ->
   `ActionChunk(control_hz from shared config, latency measured)`.
-- `_default_infer` (pragma'd): pyzmq REQ socket with poller timeout,
-  msgpack-numpy encode/decode, connect to `tcp://host:port`. Guided
-  error listing the lazy deps if missing.
-- `gr00t-seam` CI job: installs `pyzmq msgpack msgpack-numpy` and
-  asserts the exact API surface `_default_infer` uses (socket options,
-  packb/unpackb kwargs) so upstream drift fails loudly (franka
-  signature-assertion pattern, adapted).
+- `_default_infer` (pragma'd transport shell): pyzmq REQ socket with
+  RCVTIMEO/SNDTIMEO (upstream's own mechanism, not a poller);
+  msgpack-numpy encode/decode; connect to `tcp://host:port`. On timeout
+  the REQ state machine is permanently stuck: the wrapper MUST
+  `close(linger=0)`, recreate, and reconnect the socket before
+  re-raising (upstream does exactly this). The timeout/recreate wrapper
+  is structured as a testable pure class over an injected socket
+  factory, so a fake socket exercises the recreate path outside the
+  pragma. Guided error listing the lazy deps if missing.
+- `gr00t-seam` CI job: fetches Isaac-GR00T's `server_client.py` and
+  `gr00t_policy.py` raw at a PINNED ref and asserts the load-bearing
+  protocol facts still hold (the `{"endpoint", "data"}` envelope
+  literal, `get_action` endpoint name, MsgSerializer packb/unpackb call
+  shape, the `(action, info)` reply structure, the observation
+  top-level keys), plus installs `pyzmq msgpack msgpack-numpy` and
+  imports them. Asserting only pyzmq/msgpack APIs would validate
+  nothing about the server contract; the raw-source assertions are what
+  make drift fail loudly. Bumping the pinned ref is the deliberate
+  drift-review moment.
 
 ### operator.py / preflight.py / _unitree.py
 
@@ -284,19 +337,26 @@ assert `zmq`, `msgpack`, `msgpack_numpy`, `cv2`, `unitree_sdk2py`,
   pose-in-limits).
 - test_embodiment.py: inert init; connect choreography ORDER (seed with
   observed pose -> weight ramp up -> home ramp; hand-computed weight
-  values per publish); step interpolation micro-targets and delta cap
-  (hand-computed); constant weight 1 during steps; hand deadband gating;
-  clamp backstop; pacing; observation packing (asymmetric closure);
-  operator success/failure; unattended; close choreography ORDER (hands
-  open -> arm ramp -> weight ramp down -> disconnect) + idempotency +
-  disconnect-on-error; atexit registered on connect and unregistered on
-  close (injected fake atexit); bind_task; docs; RUNTIME_REQUIREMENTS
-  via conformance.
-- test_policy.py: wire obs keys per template; state slice mapping
-  (asymmetric); delta integration (cumsum anchoring, hands untouched,
-  pass-through when False); reassembly from action_keys; truncation;
-  PolicyConfig wiring; timeout config threaded to seam factory args;
-  num_inferences; helpful errors.
+  values per publish); step interpolation micro-targets anchored at the
+  last published command and delta cap (hand-computed); baseline reseed
+  at reset; constant weight 1 during steps; hand deadband gating; dex1
+  rad/s rate limit derived per publish; clamp backstop; pacing;
+  observation packing (asymmetric closure) incl. the extra
+  leg/waist StateFields from lowstate; operator success/failure;
+  unattended; close choreography ORDER (hands open -> arm ramp ->
+  weight ramp down -> disconnect) + idempotency + disconnect-on-error;
+  atexit AND SIGTERM handlers registered on connect and
+  unregistered/restored on close (injected fakes); bind_task; docs;
+  RUNTIME_REQUIREMENTS via conformance.
+- test_policy.py: nested wire obs structure (video/state/language
+  groups, batching dims, dtype casts, language key literal); state
+  slice mapping + filler/lowstate keys (asymmetric); anchor-add
+  relative path (hand-computed per-element expectations, hands
+  untouched) and the DEFAULT pass-through path; extra returned action
+  keys ignored; reassembly; truncation; PolicyConfig wiring; the
+  REQ-recreate wrapper exercised with a fake socket factory (timeout ->
+  close(linger=0) -> recreate -> raise); num_inferences; helpful
+  errors.
 - test_operator.py / test_preflight.py / test_unitree.py (loader
   messages: git URL, cyclonedds guidance).
 - test_compat.py: zero/zero; cubepick-reach realizable; negatives.
@@ -310,8 +370,10 @@ package + SDK git install + cyclonedds notes; PC2: image server pointer;
 GPU machine: Isaac-GR00T inference server command), Preflight, Run on
 hardware (config.ini; L2 adjacency; port-collision note 5555 policy vs
 camera), Safety (weight ramp choreography, no-watchdog crash backstop +
-atexit, L1+A damping e-stop and what it physically does, relative-flag
-warning, first-run slow jog), Configuration (field tables; 16-D unit
+atexit/SIGTERM and the SIGKILL gap, L1+A damping e-stop and what it
+physically does, relative-flag warning incl. server-side conversion,
+control_hz-must-match-checkpoint-fps note with the same prominence,
+first-run slow jog + bench-verify dex polarity), Configuration (field tables; 16-D unit
 table; hand collapse semantics), Development, Citation, License.
 
 ## Sequencing
