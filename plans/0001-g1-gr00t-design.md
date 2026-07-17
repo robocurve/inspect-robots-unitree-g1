@@ -1,6 +1,6 @@
 # 0001: Unitree G1 embodiment + GR00T policy plugin
 
-Status: accepted after two adversarial critique rounds plus fixes (2026-07-17)
+Status: accepted after three critique rounds (2026-07-17)
 Issue: #1
 
 ## Goal
