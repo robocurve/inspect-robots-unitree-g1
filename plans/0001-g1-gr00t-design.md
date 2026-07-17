@@ -116,14 +116,15 @@ reference), ../inspect-robots-yam.
 ## The 16-D contract
 
 - `DIM_LABELS = ("left_j1".."left_j7", "left_gripper",
-  "right_j1".."right_j7", "right_gripper")` (yam/A2 interleaved
-  convention); `ARM_DOF=7`, `ARM_WIDTH=8`, `TOTAL_DIM=16`,
+  "right_j1".."right_j7", "right_gripper")` (blockwise left-then-right,
+  yam/A2 convention); `ARM_DOF=7`, `ARM_WIDTH=8`, `TOTAL_DIM=16`,
   `GRIPPER_IDXS=(7, 15)`, `STATE_KEY="joint_pos"`, unit
   `"rad+normalized"`, single StateField shape `(16,)`.
 - `ActionSemantics(control_mode="joint_pos", rotation_repr="none",
   gripper="continuous", frame="base", dim_labels=DIM_LABELS)`. Arms are
-  absolute radians (the policy integrates GR00T deltas before emitting;
-  declared semantics stay honest). Grippers normalized, 1 = open.
+  absolute radians (stock servers emit absolute actions; the optional
+  anchor-add path converts older servers' relative offsets before
+  emitting, so declared semantics stay honest either way). Grippers normalized, 1 = open.
 - Default joint limits: G1 arm limits transcribed from the official
   URDF/datasheet by the implementer (cited in config.py), pulled 0.05 rad
   inward (franka margin pattern); gripper slots [0, 1].
