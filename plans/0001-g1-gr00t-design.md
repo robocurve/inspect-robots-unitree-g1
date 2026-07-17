@@ -227,7 +227,7 @@ asymmetric values.
   `max_joint_speed=3.0`, `weight_ramp_s=2.0`, `kp_arm=60.0`,
   `kd_arm=1.5`, `kp_wrist`, `kd_wrist` (cited defaults),
   `joint_low/joint_high`, `home_pose`, `rest_pose=None`,
-  `dex1_stroke=5.4`, `dex1_max_speed=2.7` (rad/s), `hand_kp/hand_kd`,
+  `dex1_stroke=5.4`, `dex1_max_speed=2.7` (rad/s), `hand_deadband=0.05` (normalized on-change gate for hand publishes), `hand_kp/hand_kd`,
   `cam_server_address="tcp://192.168.123.164:5556"`, `cam_timeout_s=5.0`,
   `unattended=False`, `docs_extra=""`. Post-init validation throughout.
 - `Gr00tConfig` (frozen): `host="127.0.0.1"`, `port=5555`,
@@ -298,8 +298,11 @@ asymmetric values.
   publish (deadband `hand_deadband=0.05` on-change gating, franka
   gripper-gating pattern) -> pace -> observe (arm joints + hand closure
   packed 16-D; head_cam image) -> poll_end/confirm ->
-  StepResult; `close()` = choreography; RUNTIME_REQUIREMENTS Mapping
-  (`unitree_sdk2py`, `zmq`, `cv2`, `msgpack` with install remedies);
+  StepResult; `close()` = choreography; RUNTIME_REQUIREMENTS Mapping scoped to the
+  EMBODIMENT's own lazy deps only (`unitree_sdk2py`, `zmq`, `cv2` with
+  install remedies; franka precedent scopes the map per factory), while
+  `Gr00tPolicy` declares its own RUNTIME_REQUIREMENTS (`zmq`,
+  `msgpack`, `msgpack_numpy`);
   DEVICE_SLOTS none (network robot; README documents); bind_task; docs
   with all 16 labels + docs_extra.
 
@@ -307,6 +310,7 @@ asymmetric values.
 
 - `Gr00tPolicy(config=None, *, infer_fn=None, clock=None, **flat)`,
   entry point `gr00t`. `act()`: require `head_cam` + `joint_pos` state
+  plus every passthrough-referenced key per config.py's rule
   -> build the NESTED wire obs (video/state/language groups, (1,1,...)
   batching, dtype casts, filler/lowstate keys per the template) ->
   `infer_fn(obs) -> mapping of (B,T,D) action arrays` (envelope and
@@ -420,7 +424,8 @@ atexit/SIGTERM and the SIGKILL gap, L1+A damping e-stop and what it
 physically does, relative-flag warning incl. server-side conversion,
 control_hz-must-match-checkpoint-fps note with the same prominence,
 first-run slow jog + bench-verify dex polarity), Configuration (field tables; 16-D unit
-table; hand collapse semantics), Development, Citation, License.
+table; hand collapse semantics; future backends note: UnifoLM-VLA and
+lerobot-served policies), Development, Citation, License.
 
 ## Sequencing
 
