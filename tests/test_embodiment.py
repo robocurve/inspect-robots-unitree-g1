@@ -160,7 +160,7 @@ def test_hand_deadband_dex3_and_dex1_rate_limit() -> None:
 
 
 def test_operator_success_failure_unattended_and_bind_task() -> None:
-    answers = iter(["", "yes"])
+    answers = iter(["", "", "yes"])
     operator = OperatorIO(input_fn=lambda _: next(answers))
     embodiment, _, _, _, _, _ = build(
         cfg=G1Config(weight_ramp_s=0.02, max_joint_speed=100),
@@ -174,7 +174,7 @@ def test_operator_success_failure_unattended_and_bind_task() -> None:
     assert result.info == {"operator_confirmed": True}
     embodiment.close()
 
-    answers = iter(["", "n"])
+    answers = iter(["", "", "n"])
     embodiment, _, _, _, _, _ = build(
         cfg=G1Config(weight_ramp_s=0.02, max_joint_speed=100),
         operator=OperatorIO(input_fn=lambda _: next(answers)),
@@ -402,3 +402,21 @@ def test_close_reports_weight_release_failure_after_successful_park() -> None:
     with pytest.raises(RuntimeError, match="weight fail"):
         embodiment.close()
     assert arm.events[-1] == "arm_disconnect"
+
+
+def test_reset_observes_arm_pose_after_stand_clear_wait() -> None:
+    arm = FakeArm()
+
+    def input_fn(_prompt: str = "") -> str:
+        arm.joints = np.full(14, 0.3)
+        return ""
+
+    embodiment, _, _, _, _, _ = build(
+        cfg=G1Config(weight_ramp_s=0.02, max_joint_speed=100),
+        arm=arm,
+        operator=OperatorIO(input_fn=input_fn, output_fn=lambda _msg: None),
+        poll_end=lambda: False,
+    )
+    embodiment.reset(SCENE)
+    first_publish = arm.publishes[0][0]
+    assert first_publish == pytest.approx(np.full(14, 0.3))

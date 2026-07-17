@@ -398,6 +398,13 @@ class G1Embodiment:
         if first:
             self._connect()
         arm, hand = self._require_drivers()
+        if not self._cfg.unattended:
+            self._operator.wait_ready(
+                "Arms will blend in and move to the home pose. Stand clear, then press Enter..."
+            )
+        # Observe after the human wait: the arm may sag or be repositioned
+        # while the operator holds the prompt, and the weight blend must hold
+        # the pose the arm actually has when motion begins.
         observed_arm = self._read_arm(arm)
         observed_hand = self._read_hands(hand)
         self._last_arm = observed_arm.copy()
