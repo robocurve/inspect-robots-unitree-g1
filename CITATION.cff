@@ -1,0 +1,9 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "Inspect Robots Unitree G1: GR00T adapters for G1 arms"
+authors:
+  - name: "Robocurve"
+type: software
+license: MIT
+repository-code: "https://github.com/robocurve/inspect-robots-unitree-g1"
+version: "0.1.0"
