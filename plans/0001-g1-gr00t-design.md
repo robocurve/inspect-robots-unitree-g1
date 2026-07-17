@@ -1,6 +1,6 @@
 # 0001: Unitree G1 embodiment + GR00T policy plugin
 
-Status: draft (critique loop in progress)
+Status: accepted after two adversarial critique rounds plus fixes (2026-07-17)
 Issue: #1
 
 ## Goal
@@ -156,6 +156,9 @@ reference), ../inspect-robots-yam.
     seed all commanded targets with it, then ramp `motor_cmd[29].q`
     0 -> 1 over `weight_ramp_s` (default 2.0) while holding the observed
     pose. Only then ramp to `home_pose` through the streaming path.
+    Later resets (weight already 1): reseed the published-command
+    baseline from the freshly observed pose, ramp to home through the
+    streaming path, then `operator.wait_ready()`; no weight change.
   - `close()`: ramp arms back to the pose observed at close start OR
     `rest_pose` if set (arm-only semantics; hands opened first), then
     ramp weight 1 -> 0 over `weight_ramp_s`, then disconnect. Idempotent;
@@ -191,7 +194,7 @@ inspect-robots-unitree-g1/
 │   ├── packing.py         # 16-D constants, validate_dim, pack/split, hand scalar maps
 │   ├── config.py          # G1Config, Gr00tConfig, shared space builders
 │   ├── embodiment.py      # G1Embodiment + ArmDriver/HandDriver protocols + weight choreography
-│   ├── policy.py          # Gr00tPolicy (ZMQ msgpack client + delta integration)
+│   ├── policy.py          # Gr00tPolicy (ZMQ msgpack client + optional anchor-add relative path)
 │   ├── operator.py        # OperatorIO (yam's EOF-hardened version)
 │   ├── preflight.py       # inspect-robots-unitree-g1-preflight CLI (incl. dry_run in --json)
 │   └── _unitree.py        # lazy sdk loader + install commands + cyclonedds guidance
@@ -228,18 +231,49 @@ asymmetric values.
   `cam_server_address="tcp://192.168.123.164:5556"`, `cam_timeout_s=5.0`,
   `unattended=False`, `docs_extra=""`. Post-init validation throughout.
 - `Gr00tConfig` (frozen): `host="127.0.0.1"`, `port=5555`,
-  `timeout_s=15.0` (REQ/REP with poller so a dead server raises instead
-  of blocking forever), `actions_are_relative=True`,
+  `timeout_s=15.0` (socket RCVTIMEO/SNDTIMEO so a dead server raises
+  instead of blocking forever), `actions_are_relative=False` (stock N1.7
+  servers return absolute actions; True only for older/custom
+  anchor-relative servers),
   `action_horizon=16` (GR00T chunks are long, 16-50; default matches the
   executed prefix practice), `replan_interval=8`, `name="gr00t"`,
-  `image_key="video.ego_view"`, `state_keys` template mapping our
-  packed slices to `state.left_arm/right_arm/left_hand/right_hand`, and
-  `action_keys` template for the reverse (modality-config alignment is
-  config, not code). Explicit `PolicyConfig` wiring; nothing secret in
-  asdict (no api_key equivalent here, but the test asserts the config
-  class stays out of policy.config anyway).
-- Shared builders: `ACTION_SEMANTICS`, `action_box()`,
-  `observation_space()`.
+  `image_key="video.ego_view"`, and two template mappings with a
+  CONCRETE spec type (this DSL is the part most likely to mismatch a
+  checkpoint's modality config, so it is fully specified, not invented
+  by the implementer). `SourceSpec` is a tagged tuple:
+  `("packed", start, stop)` (slice of our 16-D vector) |
+  `("hand", "left"|"right")` (scalar hand expansion via packing.py's
+  open/closed poses for dex3 or the stroke map for dex1) |
+  `("state", field_key)` (passthrough of a declared StateField, e.g.
+  lowstate legs/waist) | `("const", dim, value)` (constant fill).
+  `state_keys: Mapping[str, SourceSpec]` defaults to the G1-N1.7 layout
+  written out key by key: `state.left_arm` = ("packed", 0, 7),
+  `state.right_arm` = ("packed", 8, 15), `state.left_hand` =
+  ("hand", "left"), `state.right_hand` = ("hand", "right"),
+  `state.left_leg` = ("state", "left_leg"), `state.right_leg` =
+  ("state", "right_leg"), `state.waist` = ("state", "waist").
+  `action_keys: Mapping[str, ActionSpec]` is the reverse per-key spec:
+  `action.left_arm` -> packed slots 0-6, `action.right_arm` -> packed
+  slots 8-14, `action.left_hand`/`action.right_hand` -> compressed back
+  to the 1-D gripper scalar (mean normalized closure of whatever dim
+  the checkpoint emits; dim read from the array at runtime); keys the
+  server returns that are absent from action_keys are ignored.
+  Explicit `PolicyConfig` wiring; nothing secret in asdict (no api_key
+  equivalent here, but the test asserts the config class stays out of
+  policy.config anyway).
+- Shared builders: `ACTION_SEMANTICS`, `action_box()`, and ONE
+  `observation_space()` used by BOTH `G1Embodiment.info` and
+  `Gr00tPolicy.info`: it declares `head_cam` plus StateFields
+  `joint_pos` (16,), `left_leg` (6,), `right_leg` (6,), `waist` (3,)
+  (shapes per the N1.7 G1 modality config, cited in config.py; unit
+  rad). Sharing keeps zero/zero by construction AND keeps the policy's
+  declaration honest: it really consumes the leg/waist keys through
+  passthrough SourceSpecs, so it must declare them (compat only errors
+  on policy-declared keys the embodiment lacks; an undeclared consumed
+  key would pass compat then KeyError at act() time). act()'s
+  required-keys check covers every declared key referenced by a
+  passthrough SourceSpec, and test_compat.py asserts the policy's
+  declared state_keys equal the embodiment's.
 
 ### embodiment.py
 
@@ -252,8 +286,11 @@ asymmetric values.
 - Defaults (pragma'd) built through `_unitree.py`: arm via
   rt/arm_sdk LowCmd_ with CRC; dex1/dex3 per `hand_type`; both raise the
   guided install error when the SDK is absent.
-- `camera_reader` seam + builtin ZMQ JPEG reader (lazy zmq/cv2; timeout
-  -> helpful fault).
+- `camera_reader` seam + builtin ZMQ JPEG reader. Coverage decision:
+  the ZMQ transport shell is `# pragma: no cover`; the decode and
+  timeout-message logic is a pure function over an injected recv
+  callable, tested in test_camera.py (JPEG decode via cv2 faked, stale/
+  timeout paths, helpful fault text).
 - `G1Embodiment`: inert init (config + all seams + injected
   `atexit_module`); lazy connect at first reset with the weight-ramp
   choreography above; `step()` = validate -> clamp -> interpolated
@@ -293,11 +330,16 @@ asymmetric values.
   protocol facts still hold (the `{"endpoint", "data"}` envelope
   literal, `get_action` endpoint name, MsgSerializer packb/unpackb call
   shape, the `(action, info)` reply structure, the observation
-  top-level keys), plus installs `pyzmq msgpack msgpack-numpy` and
-  imports them. Asserting only pyzmq/msgpack APIs would validate
-  nothing about the server contract; the raw-source assertions are what
-  make drift fail loudly. Bumping the pinned ref is the deliberate
-  drift-review moment.
+  top-level keys, AND the fact the safety default rests on: the
+  server-side decode path, i.e. the `decode_action` call inside the
+  server's get_action handler in `gr00t_policy.py`, which converts
+  relative to absolute before the reply; if that assertion fails, the
+  `actions_are_relative=False` default must be re-reviewed before the
+  pin is bumped). The implementer pins the ref to the Isaac-GR00T
+  commit they re-verify these facts against at implementation time and
+  records that SHA in the workflow file with a dated comment; bumping
+  the pin is the deliberate drift-review moment. The job also installs
+  `pyzmq msgpack msgpack-numpy` and imports them.
 
 ### operator.py / preflight.py / _unitree.py
 
@@ -359,8 +401,11 @@ assert `zmq`, `msgpack`, `msgpack_numpy`, `cv2`, `unitree_sdk2py`,
   close(linger=0) -> recreate -> raise); num_inferences; helpful
   errors.
 - test_operator.py / test_preflight.py / test_unitree.py (loader
-  messages: git URL, cyclonedds guidance).
-- test_compat.py: zero/zero; cubepick-reach realizable; negatives.
+  messages: git URL, cyclonedds guidance) / test_camera.py (decode +
+  timeout logic over an injected recv callable).
+- test_compat.py: zero/zero; policy declared state_keys equal the
+  embodiment's (locks the shared-builder honesty); cubepick-reach
+  realizable; negatives.
 - test_embodiment_docs.py / test_api_snapshot.py /
   test_eval_end_to_end.py (fake drivers + fake infer_fn through eval()).
 
