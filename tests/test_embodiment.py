@@ -420,3 +420,41 @@ def test_reset_observes_arm_pose_after_stand_clear_wait() -> None:
     embodiment.reset(SCENE)
     first_publish = arm.publishes[0][0]
     assert first_publish == pytest.approx(np.full(14, 0.3))
+
+
+def test_step_rejects_non_finite_actions() -> None:
+    embodiment, arm, _, _, _, _ = build()
+    embodiment.reset(SCENE)
+    published_before = len(arm.publishes)
+    bad = np.zeros(16)
+    bad[2] = float("nan")
+    with pytest.raises(ValueError, match="finite"):
+        embodiment.step(Action(data=bad))
+    assert len(arm.publishes) == published_before
+
+
+def test_observe_requires_complete_body_state() -> None:
+    arm = FakeArm()
+    arm.body = {"left_leg": np.zeros(6), "right_leg": np.zeros(6)}
+    embodiment, _, _, _, _, _ = build(arm=arm)
+    with pytest.raises(ValueError, match="missing 'waist'"):
+        embodiment.reset(SCENE)
+
+
+def test_close_preserves_first_error_when_park_ramp_also_fails() -> None:
+    embodiment, arm, hand, _, _, _ = build()
+    embodiment.reset(SCENE)
+    arm.joints = np.full(14, 0.3)
+
+    def hand_fail(left: float, right: float) -> None:
+        raise RuntimeError("hand fail")
+
+    def arm_fail(q14: Any, weight: float, kp: Any, kd: Any) -> None:
+        raise RuntimeError("arm fail")
+
+    hand.publish_closure = hand_fail  # type: ignore[method-assign]
+    arm.publish_arm = arm_fail  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="hand fail"):
+        embodiment.close()
+    assert arm.events[-1] == "arm_disconnect"
+    assert hand.events[-1] == "hand_disconnect"

@@ -71,6 +71,10 @@ class ArmDriver(Protocol):
         """Read the 14 arm joints in SDK order."""
         ...
 
+    def read_body_state(self) -> Mapping[str, npt.NDArray[np.floating[Any]]]:
+        """Read the left_leg (6,), right_leg (6,), and waist (3,) joints."""
+        ...
+
     def publish_arm(
         self,
         q14: npt.NDArray[np.floating[Any]],
@@ -427,6 +431,8 @@ class G1Embodiment:
         """Clamp, stream speed-limited arm targets, gate hands, pace, and observe."""
         self._require_drivers()
         command = packing.validate_dim(action.data)
+        if not np.isfinite(command).all():
+            raise ValueError("action must contain only finite values")
         clamped = np.clip(command, self._cfg.low, self._cfg.high)
         self._stream_arm(
             packing.arm_slots(clamped),
@@ -664,11 +670,12 @@ class G1Embodiment:
             np.concatenate((arm_values[:7], hand_values[:1])),
             np.concatenate((arm_values[7:], hand_values[1:])),
         )
-        body_reader = getattr(arm, "read_body_state", None)
-        body = body_reader() if callable(body_reader) else {}
+        body = arm.read_body_state()
         state: dict[str, npt.NDArray[np.float64]] = {packing.STATE_KEY: packed}
         for key, shape in (("left_leg", (6,)), ("right_leg", (6,)), ("waist", (3,))):
-            values = np.asarray(body.get(key, np.zeros(shape)), dtype=np.float64)
+            if key not in body:
+                raise ValueError(f"arm driver body state is missing {key!r}")
+            values = np.asarray(body[key], dtype=np.float64)
             if values.shape != shape or not np.all(np.isfinite(values)):
                 raise ValueError(f"arm driver returned invalid {key} state: {values.shape}")
             state[key] = values.copy()

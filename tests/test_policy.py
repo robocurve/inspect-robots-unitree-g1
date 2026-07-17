@@ -269,3 +269,16 @@ def test_req_transport_reply_validation(reply: Any) -> None:
     transport = ZmqReqTransport(lambda: socket, "x", 1, dumps=lambda _: b"", loads=lambda _: reply)
     with pytest.raises(ValueError, match="reply"):
         transport.get_action({})
+
+
+def test_req_transport_surfaces_server_error_reply() -> None:
+    socket = Socket(b"ok")
+    transport = ZmqReqTransport(
+        lambda: socket,
+        "x",
+        1,
+        dumps=lambda _: b"",
+        loads=lambda _: {"error": "boom in the handler"},
+    )
+    with pytest.raises(RuntimeError, match="GR00T server error: boom in the handler"):
+        transport.get_action({})

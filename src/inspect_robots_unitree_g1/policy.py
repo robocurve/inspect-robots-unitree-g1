@@ -102,6 +102,8 @@ class ZmqReqTransport:
             self._socket.close(linger=0)
             self._socket = self._new_socket()
             raise
+        if isinstance(response, Mapping) and "error" in response:
+            raise RuntimeError(f"GR00T server error: {response['error']}")
         if not isinstance(response, list) or len(response) != 2:
             raise ValueError("GR00T reply must be a two-item [action, info] list")
         action = response[0]
