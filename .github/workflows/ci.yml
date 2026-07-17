@@ -1,0 +1,183 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: lint · type
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            **/pyproject.toml
+            **/uv.lock
+      - name: Install from uv.lock (dev extras)
+        run: uv sync --locked --python 3.11 --extra dev
+      - name: Ruff (lint)
+        run: uv run ruff check .
+      - name: Ruff (format check)
+        run: uv run ruff format --check .
+      - name: Mypy (strict)
+        run: uv run mypy
+
+  test:
+    name: test (${{ matrix.os }}, py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            **/pyproject.toml
+            **/uv.lock
+      - name: Install from uv.lock (dev extras)
+        run: uv sync --locked --python ${{ matrix.python-version }} --extra dev
+      - name: Pytest (100% coverage)
+        run: uv run pytest --cov --cov-report=term-missing
+
+  import-hygiene:
+    name: import with minimal dependencies
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            **/pyproject.toml
+            **/uv.lock
+      - name: Install package with only locked core pins
+        run: |
+          uv venv --python 3.12
+          uv pip install --no-deps .
+          uv export --locked --no-emit-project --no-hashes \
+            | grep -E '^(inspect-robots|numpy)==' > /tmp/minimal-locked.txt
+          uv pip install -r /tmp/minimal-locked.txt
+      - name: Assert integrations absent, then import
+        run: |
+          .venv/bin/python - <<'PY'
+          import importlib.util
+          for mod in ("zmq", "msgpack", "msgpack_numpy", "cv2", "unitree_sdk2py", "torch"):
+              assert importlib.util.find_spec(mod) is None, f"{mod} unexpectedly installed"
+          import inspect_robots_unitree_g1
+          print(
+              "inspect_robots_unitree_g1",
+              inspect_robots_unitree_g1.__version__,
+              "imported with minimal deps",
+          )
+          PY
+
+  gr00t-seam:
+    name: pinned Isaac-GR00T protocol seam
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Fetch and verify pinned protocol files
+        env:
+          # verified 2026-07-17 against main
+          ISAAC_GR00T_REF: 9c7e746b2cd37a810070a98ef41d290a07e806c2
+        run: |
+          base="https://raw.githubusercontent.com/NVIDIA/Isaac-GR00T/$ISAAC_GR00T_REF"
+          curl --fail --silent --show-error "$base/gr00t/policy/server_client.py" -o /tmp/server_client.py
+          curl --fail --silent --show-error "$base/gr00t/policy/policy.py" -o /tmp/policy.py
+          curl --fail --silent --show-error "$base/gr00t/policy/gr00t_policy.py" -o /tmp/gr00t_policy.py
+          curl --fail --silent --show-error "$base/gr00t/configs/data/embodiment_configs.py" -o /tmp/embodiment_configs.py
+          python - <<'PY'
+          from pathlib import Path
+
+          checks = {
+              "/tmp/server_client.py": [
+                  'request: dict = {"endpoint": endpoint}',
+                  '"get_action"',
+                  "msgpack.packb",
+                  "msgpack.unpackb",
+                  "tuple(response)",
+                  "zmq.error.Again",
+                  "_init_socket",
+                  "RCVTIMEO",
+              ],
+              "/tmp/policy.py": ["def get_action", "check_observation"],
+              "/tmp/gr00t_policy.py": ["decode_action", '["video", "state", "language"]'],
+              "/tmp/embodiment_configs.py": [
+                  '"unitree_g1_full_body_with_waist_height_nav_cmd"',
+                  '"annotation.human.task_description"',
+                  '"ego_view"',
+                  '"left_leg"',
+              ],
+          }
+          for path, needles in checks.items():
+              text = Path(path).read_text()
+              for needle in needles:
+                  assert needle in text, f"{path} lost {needle!r}"
+          PY
+      - name: Import lazy wire dependencies
+        run: |
+          uv venv --python 3.12
+          uv pip install pyzmq msgpack msgpack-numpy
+          uv run --no-sync python - <<'PY'
+          import msgpack
+          import msgpack_numpy
+          import zmq
+          PY
+
+  ci-ok:
+    name: ci-ok
+    if: ${{ always() }}
+    needs: [quality, test, import-hygiene, gr00t-seam]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail unless every needed job succeeded
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: echo "$RESULTS" | jq -e 'all(.[]; .result == "success")'
+
+  alert-red-main:
+    name: alert on red main
+    if: ${{ failure() && github.event_name == 'push' }}
+    needs: [quality, test, import-hygiene, gr00t-seam]
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Open an issue unless one is already open
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          existing=$(gh issue list -R "$GITHUB_REPOSITORY" --state open --search "CI is red on main in:title" --json number --jq length)
+          if [ "$existing" = "0" ]; then
+            gh issue create -R "$GITHUB_REPOSITORY" \
+              --title "CI is red on main (${GITHUB_SHA:0:8})" \
+              --body "CI failed on a push to main: $RUN_URL. Stop the line: fix forward or revert before merging anything else. If the failure is transient, re-run the failed jobs and close this issue."
+          else
+            echo "an open red-main issue already exists; not filing another"
+          fi

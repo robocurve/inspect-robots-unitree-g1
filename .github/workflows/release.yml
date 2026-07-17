@@ -1,0 +1,81 @@
+name: Release
+
+# Two ways to release; both publish to PyPI via trusted publishing (OIDC):
+#
+#   1. One-click: Actions -> Release -> "Run workflow" -> pick a version bump.
+#      The version is derived from git tags by hatch-vcs, so the cut job only
+#      computes the next tag and creates the GitHub release — nothing is
+#      committed or pushed to main (main is PR-only). Publish then runs in
+#      this same workflow run. (A release created with the built-in
+#      GITHUB_TOKEN never re-triggers workflows, which is why publish must
+#      live in this run rather than firing on the release event.)
+#
+#   2. Manual: publish a GitHub release by hand — the publish job runs on the
+#      release event. The tag must point at a commit that contains this file.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump (applied to the latest v* tag)"
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  cut:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # create the tag + release
+    outputs:
+      tag: ${{ steps.bump.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # full tag history to find the latest version
+      - name: Compute next tag from latest v* tag
+        id: bump
+        env:
+          BUMP: ${{ inputs.bump }}
+        run: |
+          latest=$(git tag --list 'v*' --sort=-v:refname | head -1)
+          latest=${latest:-v0.0.0}
+          IFS=. read -r major minor patch <<< "${latest#v}"
+          case "$BUMP" in
+            major) major=$((major+1)); minor=0; patch=0 ;;
+            minor) minor=$((minor+1)); patch=0 ;;
+            patch) patch=$((patch+1)) ;;
+          esac
+          echo "tag: $latest -> v$major.$minor.$patch"
+          echo "tag=v$major.$minor.$patch" >> "$GITHUB_OUTPUT"
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.bump.outputs.tag }}
+        run: gh release create "$TAG" --target "$GITHUB_SHA" --title "$TAG" --generate-notes
+
+  publish:
+    # Directly on manual release events; after cut on workflow_dispatch.
+    needs: [cut]
+    if: ${{ !cancelled() && (github.event_name == 'release' || needs.cut.result == 'success') }}
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write  # OIDC token for PyPI trusted publishing
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.cut.outputs.tag || github.ref }}
+          fetch-depth: 0  # hatch-vcs derives the version from git tags
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Build sdist + wheel
+        run: uv build
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
