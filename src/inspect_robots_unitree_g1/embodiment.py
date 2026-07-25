@@ -450,7 +450,11 @@ class G1Embodiment:
             hand_target=np.asarray(clamped[list(packing.GRIPPER_IDXS)]),
         )
         self.num_steps += 1
-        observation = self._observe(self._instruction)
+        try:
+            observation = self._observe(self._instruction)
+        except BaseException:
+            self.close()
+            raise
         if not self._cfg.unattended and self._poll_end():
             success = self._operator.confirm_success()
             return StepResult(

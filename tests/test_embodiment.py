@@ -458,3 +458,18 @@ def test_close_preserves_first_error_when_park_ramp_also_fails() -> None:
         embodiment.close()
     assert arm.events[-1] == "arm_disconnect"
     assert hand.events[-1] == "hand_disconnect"
+
+
+def test_step_observation_failure_triggers_close() -> None:
+    def failing_camera() -> np.ndarray:
+        raise RuntimeError("camera failure")
+
+    embodiment, arm, _, _, _, _ = build()
+    embodiment.reset(SCENE)
+    embodiment._camera_reader = failing_camera
+    arm.events.clear()
+
+    with pytest.raises(RuntimeError, match="camera failure"):
+        embodiment.step(Action(data=np.zeros(16)))
+
+    assert "arm_disconnect" in arm.events
