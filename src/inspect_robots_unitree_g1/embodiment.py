@@ -111,6 +111,19 @@ ArmDriverFactory = Callable[[G1Config], ArmDriver]
 HandDriverFactory = Callable[[G1Config], HandDriver]
 
 
+_DDS_INITIALIZED: bool = False
+
+
+def _init_dds(iface: str | None, channel_factory_init_fn: Any) -> None:
+    global _DDS_INITIALIZED
+    if not _DDS_INITIALIZED:
+        if iface is None:
+            channel_factory_init_fn(0)
+        else:
+            channel_factory_init_fn(0, iface)
+        _DDS_INITIALIZED = True
+
+
 def _default_arm_driver_factory(cfg: G1Config) -> ArmDriver:  # pragma: no cover - hardware
     """Construct the real rt/arm_sdk publisher and rt/lowstate subscriber."""
     _load_unitree()
@@ -123,10 +136,7 @@ def _default_arm_driver_factory(cfg: G1Config) -> ArmDriver:  # pragma: no cover
     from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowCmd_, LowState_
     from unitree_sdk2py.utils.crc import CRC
 
-    if cfg.iface is None:
-        ChannelFactoryInitialize(0)
-    else:
-        ChannelFactoryInitialize(0, cfg.iface)
+    _init_dds(cfg.iface, ChannelFactoryInitialize)
     publisher = ChannelPublisher("rt/arm_sdk", LowCmd_)
     publisher.Init()
     subscriber = ChannelSubscriber("rt/lowstate", LowState_)
