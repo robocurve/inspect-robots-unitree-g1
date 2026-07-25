@@ -1,4 +1,5 @@
 import builtins
+from typing import Any
 
 import pytest
 
@@ -47,3 +48,22 @@ def test_loader_returns_present_module(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(builtins, "__import__", present)
     assert _unitree._load_unitree() is sentinel
+
+
+def test_init_dds_only_calls_factory_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    from inspect_robots_unitree_g1 import embodiment
+
+    calls: list[tuple[Any, ...]] = []
+
+    def factory_init(*args: Any) -> None:
+        calls.append(args)
+
+    monkeypatch.setattr(embodiment, "_DDS_INITIALIZED", False)
+    embodiment._init_dds(None, factory_init)
+    assert calls == [(0,)]
+    embodiment._init_dds("eth0", factory_init)
+    assert calls == [(0,)]  # No second call
+
+    monkeypatch.setattr(embodiment, "_DDS_INITIALIZED", False)
+    embodiment._init_dds("eth0", factory_init)
+    assert calls == [(0,), (0, "eth0")]
