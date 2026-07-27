@@ -503,4 +503,3 @@ def test_step_stream_failure_triggers_close() -> None:
         embodiment.step(Action(data=np.zeros(16)))
 
     assert "arm_disconnect" in arm.events
-
