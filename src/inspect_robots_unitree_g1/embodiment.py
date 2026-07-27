@@ -435,7 +435,11 @@ class G1Embodiment:
             self._operator.wait_ready()
         self._instruction = scene.instruction
         self.num_steps = 0
-        return self._observe(scene.instruction)
+        try:
+            return self._observe(scene.instruction)
+        except BaseException:
+            self.close()
+            raise
 
     def step(self, action: Action) -> StepResult:
         """Clamp, stream speed-limited arm targets, gate hands, pace, and observe."""
@@ -444,13 +448,13 @@ class G1Embodiment:
         if not np.isfinite(command).all():
             raise ValueError("action must contain only finite values")
         clamped = np.clip(command, self._cfg.low, self._cfg.high)
-        self._stream_arm(
-            packing.arm_slots(clamped),
-            weight=1.0,
-            hand_target=np.asarray(clamped[list(packing.GRIPPER_IDXS)]),
-        )
-        self.num_steps += 1
         try:
+            self._stream_arm(
+                packing.arm_slots(clamped),
+                weight=1.0,
+                hand_target=np.asarray(clamped[list(packing.GRIPPER_IDXS)]),
+            )
+            self.num_steps += 1
             observation = self._observe(self._instruction)
         except BaseException:
             self.close()

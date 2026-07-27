@@ -473,3 +473,34 @@ def test_step_observation_failure_triggers_close() -> None:
         embodiment.step(Action(data=np.zeros(16)))
 
     assert "arm_disconnect" in arm.events
+
+
+def test_reset_observation_failure_triggers_close() -> None:
+    def failing_camera() -> np.ndarray:
+        raise RuntimeError("camera failure")
+
+    embodiment, arm, _, _, _, _ = build()
+    embodiment._camera_reader = failing_camera
+    arm.events.clear()
+
+    with pytest.raises(RuntimeError, match="camera failure"):
+        embodiment.reset(SCENE)
+
+    assert "arm_disconnect" in arm.events
+
+
+def test_step_stream_failure_triggers_close() -> None:
+    embodiment, arm, _, _, _, _ = build()
+    embodiment.reset(SCENE)
+
+    def failing_publish(*args: Any) -> None:
+        raise RuntimeError("stream failure")
+
+    arm.publish_arm = failing_publish  # type: ignore[method-assign]
+    arm.events.clear()
+
+    with pytest.raises(RuntimeError, match="stream failure"):
+        embodiment.step(Action(data=np.zeros(16)))
+
+    assert "arm_disconnect" in arm.events
+
