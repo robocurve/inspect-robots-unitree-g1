@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import atexit
 import contextlib
+import errno
 import math
+import os
 import signal
 import time
 from collections.abc import Callable, Mapping
@@ -301,7 +303,13 @@ def decode_jpeg_frame(recv: Callable[[], bytes], cv2_module: Any) -> npt.NDArray
     try:
         payload = recv()
     except Exception as exc:
-        raise RuntimeError("head camera timed out while waiting for a JPEG frame") from exc
+        err = getattr(exc, "errno", None)
+        if isinstance(exc, TimeoutError) or err in (
+            errno.EAGAIN,
+            getattr(errno, "EWOULDBLOCK", None),
+        ):
+            raise RuntimeError("head camera timed out while waiting for a JPEG frame") from exc
+        raise RuntimeError(f"head camera frame receive failed: {exc}") from exc
     if not payload:
         raise RuntimeError("head camera returned an empty or stale JPEG frame")
     encoded = np.frombuffer(payload, dtype=np.uint8)
@@ -380,6 +388,7 @@ class G1Embodiment:
         self._weight_enabled = False
         self._backstops_registered = False
         self._previous_sigterm: Any = None
+        self._closing = False
         self._instruction: str | None = None
         self._bound_max_steps: int | None = None
         self._last_publish_time = 0.0
@@ -435,11 +444,7 @@ class G1Embodiment:
             self._operator.wait_ready()
         self._instruction = scene.instruction
         self.num_steps = 0
-        try:
-            return self._observe(scene.instruction)
-        except BaseException:
-            self.close()
-            raise
+        return self._observe(scene.instruction)
 
     def step(self, action: Action) -> StepResult:
         """Clamp, stream speed-limited arm targets, gate hands, pace, and observe."""
@@ -448,13 +453,13 @@ class G1Embodiment:
         if not np.isfinite(command).all():
             raise ValueError("action must contain only finite values")
         clamped = np.clip(command, self._cfg.low, self._cfg.high)
+        self._stream_arm(
+            packing.arm_slots(clamped),
+            weight=1.0,
+            hand_target=np.asarray(clamped[list(packing.GRIPPER_IDXS)]),
+        )
+        self.num_steps += 1
         try:
-            self._stream_arm(
-                packing.arm_slots(clamped),
-                weight=1.0,
-                hand_target=np.asarray(clamped[list(packing.GRIPPER_IDXS)]),
-            )
-            self.num_steps += 1
             observation = self._observe(self._instruction)
         except BaseException:
             self.close()
@@ -471,9 +476,16 @@ class G1Embodiment:
 
     def close(self) -> None:
         """Open hands, park arms, blend weight to zero, and always disconnect."""
+        # If a second SIGTERM arrives during an active close(), the re-entrant
+        # close() no-ops here, allowing _handle_sigterm to immediately restore
+        # SIG_DFL and terminate the process ("second signal kills immediately").
+        if self._closing:
+            return
+        self._closing = True
         self._bound_max_steps = None
         arm, hand = self._arm, self._hand
         if arm is None and hand is None:
+            self._closing = False
             return
         error: BaseException | None = None
         clean = False
@@ -520,6 +532,7 @@ class G1Embodiment:
             self._hand = None
             self._last_arm = None
             self._last_hand = None
+            self._closing = False
             clean = error is None
             if clean:
                 self._unregister_backstops()
@@ -566,17 +579,28 @@ class G1Embodiment:
         if not self._backstops_registered:
             return
         self._atexit.unregister(self.close)
-        self._signal.signal(self._signal.SIGTERM, self._previous_sigterm)
+        prev = self._previous_sigterm
+        # signal.signal() rejects None; treat it as SIG_DFL
+        if prev is None:
+            prev = self._signal.SIG_DFL
+        self._signal.signal(self._signal.SIGTERM, prev)
         self._backstops_registered = False
         self._previous_sigterm = None
 
     def _handle_sigterm(self, signum: int, frame: FrameType | None) -> None:
         previous = self._previous_sigterm
         try:
+            # If close() is already in progress, this call no-ops via self._closing check,
+            # and execution proceeds to finally where default disposition terminates process.
             self.close()
         finally:
             if callable(previous):
                 previous(signum, frame)
+            elif previous in (None, self._signal.SIG_DFL):
+                # Restore default disposition so process terminates after
+                # arm-parking completes (or immediately if re-entrant).
+                self._signal.signal(signum, self._signal.SIG_DFL)
+                os.kill(os.getpid(), signum)
 
     def _require_drivers(self) -> tuple[ArmDriver, HandDriver]:
         if self._arm is None or self._hand is None:

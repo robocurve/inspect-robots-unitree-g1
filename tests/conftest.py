@@ -82,6 +82,8 @@ class FakeAtexit:
 
 class FakeSignal:
     SIGTERM = 15
+    SIG_DFL = 0
+    SIG_IGN = 1
 
     def __init__(self, previous: Any = None) -> None:
         self.previous = previous

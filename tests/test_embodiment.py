@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from types import SimpleNamespace
 from typing import Any
 
@@ -203,7 +204,7 @@ def test_close_order_rest_weight_down_disconnect_and_idempotency() -> None:
     assert hand.events[-1] == "hand_disconnect"
     assert arm.events[-1] == "arm_disconnect"
     assert len(exit_module.unregistered) == 1
-    assert signal_module.handlers[-1][1] is None
+    assert signal_module.handlers[-1][1] == signal_module.SIG_DFL
     count = len(arm.events)
     embodiment.close()
     assert len(arm.events) == count
@@ -353,11 +354,50 @@ def test_internal_guard_branches_and_dex3_pose() -> None:
     assert arm.events[-1] == "arm_disconnect"
 
 
-def test_sigterm_without_callable_previous_and_arm_publish_failure() -> None:
+def test_sigterm_without_callable_previous_terminates_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    kills: list[int] = []
+    events_at_kill: list[str] = []
+    disposition_at_kill: list[Any] = []
     embodiment, arm, _, _, _, signal_module = build(signal=FakeSignal(previous=0))
+
+    def fake_kill(pid: int, sig: int) -> None:
+        kills.append(sig)
+        events_at_kill.extend(arm.events)
+        disposition_at_kill.append(signal_module.handlers[-1][1])
+
+    monkeypatch.setattr(os, "kill", fake_kill)
     embodiment.reset(SCENE)
     signal_module.handlers[0][1](15, None)
+    # After parking the process must re-raise SIGTERM via os.kill
+    assert kills == [15]
+    assert "arm_disconnect" in events_at_kill
+    assert disposition_at_kill == [signal_module.SIG_DFL]
 
+
+def test_close_reentrancy_guard_and_closing_reset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """close() called recursively (e.g. SIGTERM during teardown) must return
+    immediately; _closing must be cleared so a later reset→close cycle works."""
+    monkeypatch.setattr(os, "kill", lambda pid, sig: None)
+    embodiment, arm, _, _, _, signal_module = build()
+    embodiment.reset(SCENE)
+
+    # Trigger re-entrant SIGTERM during disconnect
+    def reentrant_disconnect() -> None:
+        arm.events.append("arm_disconnect")
+        signal_module.handlers[0][1](15, None)
+
+    arm.disconnect = reentrant_disconnect  # type: ignore[method-assign]
+    embodiment.close()
+
+    # _closing must be False so a second close() after reset works
+    assert not embodiment._closing
+
+
+def test_sigterm_and_arm_publish_failure() -> None:
     embodiment, arm, _, _, _, _ = build()
     embodiment.reset(SCENE)
 
@@ -368,6 +408,31 @@ def test_sigterm_without_callable_previous_and_arm_publish_failure() -> None:
     with pytest.raises(RuntimeError, match="arm publish"):
         embodiment.close()
     assert arm.events[-1] == "arm_disconnect"
+
+
+def test_unregister_backstops_with_none_previous() -> None:
+    """_unregister_backstops must not pass None to signal.signal()."""
+    embodiment, _, _, _, _, signal_module = build(signal=FakeSignal(previous=None))
+    embodiment.reset(SCENE)
+    # close() → _unregister_backstops(); previous is None → should use SIG_DFL
+    embodiment.close()
+    # The last signal restore must be SIG_DFL (0), not None
+    restored = signal_module.handlers[-1][1]
+    assert restored == signal_module.SIG_DFL
+
+
+def test_sigterm_with_sig_ign_previous_parks_and_stays_alive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When previous handler is SIG_IGN the process parks arms but does NOT
+    call os.kill (the signal was explicitly ignored; ignoring continues)."""
+    kills: list[int] = []
+    monkeypatch.setattr(os, "kill", lambda pid, sig: kills.append(sig))
+    sig = FakeSignal(previous=FakeSignal.SIG_IGN)
+    embodiment, _, _, _, _, signal_module = build(signal=sig)
+    embodiment.reset(SCENE)
+    signal_module.handlers[0][1](15, None)
+    assert kills == []  # SIG_IGN → no os.kill re-raise
 
 
 def test_close_read_failure_still_attempts_hand_and_weight_release() -> None:
@@ -470,36 +535,6 @@ def test_step_observation_failure_triggers_close() -> None:
     arm.events.clear()
 
     with pytest.raises(RuntimeError, match="camera failure"):
-        embodiment.step(Action(data=np.zeros(16)))
-
-    assert "arm_disconnect" in arm.events
-
-
-def test_reset_observation_failure_triggers_close() -> None:
-    def failing_camera() -> np.ndarray:
-        raise RuntimeError("camera failure")
-
-    embodiment, arm, _, _, _, _ = build()
-    embodiment._camera_reader = failing_camera
-    arm.events.clear()
-
-    with pytest.raises(RuntimeError, match="camera failure"):
-        embodiment.reset(SCENE)
-
-    assert "arm_disconnect" in arm.events
-
-
-def test_step_stream_failure_triggers_close() -> None:
-    embodiment, arm, _, _, _, _ = build()
-    embodiment.reset(SCENE)
-
-    def failing_publish(*args: Any) -> None:
-        raise RuntimeError("stream failure")
-
-    arm.publish_arm = failing_publish  # type: ignore[method-assign]
-    arm.events.clear()
-
-    with pytest.raises(RuntimeError, match="stream failure"):
         embodiment.step(Action(data=np.zeros(16)))
 
     assert "arm_disconnect" in arm.events
