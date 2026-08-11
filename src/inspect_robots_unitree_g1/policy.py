@@ -274,11 +274,7 @@ class Gr00tPolicy:
         for dotted, spec in self._cfg.action_keys.items():
             _, inner = dotted.split(".", 1)
             key = next(
-                (
-                    candidate
-                    for candidate in (inner, dotted, f"action.{inner}")
-                    if candidate in response
-                ),
+                (candidate for candidate in (inner, dotted) if candidate in response),
                 None,
             )
             if key is None:

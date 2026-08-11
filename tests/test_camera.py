@@ -1,3 +1,5 @@
+import errno
+
 import numpy as np
 import pytest
 
@@ -36,7 +38,19 @@ def test_timeout_and_invalid_decode() -> None:
     def timeout() -> bytes:
         raise TimeoutError
 
+    def eagain() -> bytes:
+        exc = Exception("resource temporarily unavailable")
+        exc.errno = errno.EAGAIN
+        raise exc
+
+    def conn_refused() -> bytes:
+        raise ConnectionRefusedError("connection refused")
+
     with pytest.raises(RuntimeError, match="timed out"):
         decode_jpeg_frame(timeout, Cv2(np.zeros((1, 1, 3))))
+    with pytest.raises(RuntimeError, match="timed out"):
+        decode_jpeg_frame(eagain, Cv2(np.zeros((1, 1, 3))))
+    with pytest.raises(RuntimeError, match="frame receive failed: connection refused"):
+        decode_jpeg_frame(conn_refused, Cv2(np.zeros((1, 1, 3))))
     with pytest.raises(RuntimeError, match="invalid JPEG"):
         decode_jpeg_frame(lambda: b"bad", Cv2(None))
