@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "inspect-robots-unitree-g1"
 dynamic = ["version", "readme"]
 description = "Inspect Robots adapters for Unitree G1 arms and Isaac-GR00T policy servers."
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "RoboCurve" }]
@@ -60,7 +60,7 @@ fallback_version = "0.0.0"
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py311"
 src = ["src", "tests"]
 
 [tool.ruff.lint]
@@ -74,7 +74,7 @@ ignore = ["D105", "D107"]
 known-first-party = ["inspect_robots_unitree_g1"]
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.11"
 strict = true
 files = ["src/inspect_robots_unitree_g1"]
 
