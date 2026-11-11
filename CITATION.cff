@@ -1,6 +1,6 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
-title: "Inspect Robots Unitree G1: GR00T adapters for G1 arms"
+title: "Inspect Robots Unitree G1: GR00T arm adapters and walking embodiments for LLM agents"
 authors:
   - name: "Robocurve"
 type: software
