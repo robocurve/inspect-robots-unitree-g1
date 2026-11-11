@@ -548,3 +548,29 @@ def test_streamer_sends_and_takeovers_are_serialized() -> None:
     assert entries_after_reset >= 1
     rig.emb.stream_once()
     assert held_during_send and all(held_during_send)
+
+
+def test_a_failed_origin_read_at_reset_releases_and_disconnects() -> None:
+    rig, driver = mobile_rig()
+    released: list[bool] = []
+    original_release = driver.release_hands
+
+    def release() -> bool:
+        released.append(True)
+        return original_release()
+
+    def broken_state() -> Any:
+        raise RuntimeError("rt/lowstate is 1.00 s old; stopping")
+
+    driver.release_hands = release  # type: ignore[method-assign]
+    original_engage = driver.engage_hands
+
+    def engage_then_break() -> bool:
+        done = original_engage()
+        driver.read_state = broken_state  # type: ignore[method-assign]
+        return done
+
+    driver.engage_hands = engage_then_break  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="rt/lowstate"):
+        rig.reset()
+    assert released and driver.connected is False

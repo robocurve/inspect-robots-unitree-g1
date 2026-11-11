@@ -190,13 +190,9 @@ class LeggedEmbodiment:
             self._operator.wait_ready(self.READY_PROMPT)
         try:
             self._reset_extra(driver)
-        except BaseException:
-            self.close()
-            raise
-        self._origin = self._read_state(driver)
-        self._instruction = scene.instruction
-        self.num_steps = 0
-        try:
+            self._origin = self._read_state(driver)
+            self._instruction = scene.instruction
+            self.num_steps = 0
             return self._observe()
         except BaseException:
             self.close()

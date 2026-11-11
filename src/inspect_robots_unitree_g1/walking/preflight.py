@@ -50,6 +50,7 @@ class ProbeResult:
     rpy: Vec | None = None
     arm_q: Vec | None = None
     odom_age_s: float | None = None
+    lowstate_age_s: float | None = None
     odom_pose: Vec | None = None
     strokes: Vec | None = None
     frame_shape: tuple[int, ...] | None = None
@@ -92,9 +93,16 @@ def _locomotion(probe: ProbeResult) -> Check:
     return Check("locomotion", "ok", f"FSM id {fsm_id} (not limp)")
 
 
-def _lowstate(probe: ProbeResult) -> Check:
+def _lowstate(cfg: G1MobileConfig, probe: ProbeResult) -> Check:
     if probe.rpy is None:
         return Check("lowstate", "fail", "no rt/lowstate sample")
+    if probe.lowstate_age_s is not None and probe.lowstate_age_s > cfg.lowstate_stale_s:
+        return Check(
+            "lowstate",
+            "fail",
+            f"rt/lowstate stopped: last sample {probe.lowstate_age_s:.2f} s old "
+            f"(the driver refuses over {cfg.lowstate_stale_s} s)",
+        )
     if not _valid(probe.rpy, 3):
         return Check("lowstate", "fail", f"invalid IMU reading {probe.rpy!r}")
     roll, pitch = float(probe.rpy[0]), float(probe.rpy[1])
@@ -176,7 +184,7 @@ def assess(cfg: G1MobileConfig, probe: ProbeResult) -> list[Check]:
     """Turn what the robot reported into report lines."""
     return [
         _locomotion(probe),
-        _lowstate(probe),
+        _lowstate(cfg, probe),
         _arms(cfg, probe),
         _odometry(cfg, probe),
         _grippers(cfg, probe),
@@ -258,6 +266,7 @@ def probe_robot(cfg: G1MobileConfig, seconds: float) -> ProbeResult:  # pragma: 
     lock = threading.Lock()
     result = ProbeResult()
     odom_time: list[float] = []
+    lowstate_time: list[float] = []
     dex: list[float | None] = [None, None]
 
     def on_lowstate(msg: object) -> None:
@@ -268,6 +277,7 @@ def probe_robot(cfg: G1MobileConfig, seconds: float) -> ProbeResult:  # pragma: 
         )
         with lock:
             result.rpy, result.arm_q = rpy, q
+            lowstate_time[:] = [time.monotonic()]
 
     def on_odom(msg: object) -> None:
         pose = np.asarray(
@@ -315,6 +325,8 @@ def probe_robot(cfg: G1MobileConfig, seconds: float) -> ProbeResult:  # pragma: 
         with lock:
             if odom_time:
                 result.odom_age_s = time.monotonic() - odom_time[0]
+            if lowstate_time:
+                result.lowstate_age_s = time.monotonic() - lowstate_time[0]
             if all(value is not None for value in dex):
                 result.strokes = np.asarray(dex, dtype=np.float64)
         return result
