@@ -216,11 +216,21 @@ def test_release_that_never_finishes_is_reported() -> None:
     rig.emb._release_extra(driver)
 
 
-def test_a_takeover_that_never_finishes_is_reported() -> None:
+def test_a_takeover_that_never_finishes_is_reported_and_released() -> None:
     rig, driver = mobile_rig()
     driver.engage_hands = lambda: False  # type: ignore[method-assign]
+    released: list[bool] = []
+    original = driver.release_hands
+
+    def release() -> bool:
+        released.append(True)
+        return original()
+
+    driver.release_hands = release  # type: ignore[method-assign]
     with pytest.raises(RuntimeError, match="did not finish taking over"):
         rig.reset()
+    # Close hands back the partly taken-over arms before disconnecting.
+    assert released and driver.connected is False
 
 
 # ---------------------------------------------------------------------- real arm driver

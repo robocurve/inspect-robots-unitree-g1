@@ -437,6 +437,10 @@ class LeggedEmbodiment:
         finally:
             if callable(previous):
                 previous(signum, frame)
+            elif previous is not self._signal.SIG_IGN:
+                # Default (or a handler installed outside Python): terminate as usual.
+                self._signal.signal(signum, self._signal.SIG_DFL)
+                self._signal.raise_signal(signum)
 
     def _require_driver(self) -> LeggedDriver:
         if self._driver is None:

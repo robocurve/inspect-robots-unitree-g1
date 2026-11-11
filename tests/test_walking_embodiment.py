@@ -333,12 +333,23 @@ def test_sigterm_closes_then_chains_previous_handler() -> None:
     assert seen == [15]
 
 
-def test_sigterm_with_non_callable_previous_handler() -> None:
+def test_sigterm_with_the_default_handler_still_terminates() -> None:
     rig = Rig()
-    rig.signal.previous = 0  # SIG_DFL-like sentinel
+    rig.signal.previous = rig.signal.SIG_DFL
     rig.reset()
     rig.signal.handlers[0][1](15, None)
     assert rig.driver.events[-1] == "disconnect"
+    assert rig.signal.raised == [15]  # default action restored and re-raised
+    assert rig.signal.handlers[-1] == (15, rig.signal.SIG_DFL)
+
+
+def test_sigterm_with_an_ignoring_handler_only_cleans_up() -> None:
+    rig = Rig()
+    rig.signal.previous = rig.signal.SIG_IGN
+    rig.reset()
+    rig.signal.handlers[0][1](15, None)
+    assert rig.driver.events[-1] == "disconnect"
+    assert rig.signal.raised == []
 
 
 def test_unregister_is_idempotent(rig: Rig) -> None:

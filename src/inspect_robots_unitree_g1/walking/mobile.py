@@ -175,6 +175,8 @@ class G1MobileEmbodiment(G1Embodiment):
         self._grip_targets = np.zeros(2, dtype=np.float64)
         #: Arms are only commanded between reset's homing and close's release.
         self._hands_active = False
+        #: The arms may hold arm-sdk weight (takeover started) until close releases them.
+        self._arms_owned = False
 
     @property
     def _mobile_cfg(self) -> G1MobileConfig:
@@ -195,8 +197,10 @@ class G1MobileEmbodiment(G1Embodiment):
         """Take the arms over holding their measured pose, then glide the palms home."""
         hands = self._hands(driver)
         with self._lock:
-            # The streamer stays off the arms until the takeover completes.
+            # The streamer stays off the arms until the takeover completes, but from
+            # the first takeover tick close() must hand the arms back.
             self._hands_active = False
+            self._arms_owned = True
         cfg = self._mobile_cfg
         ticks = math.ceil((cfg.arm_weight_ramp_s + 1.0) * cfg.stream_hz)
         for _ in range(ticks):
@@ -263,8 +267,10 @@ class G1MobileEmbodiment(G1Embodiment):
     def _release_extra(self, driver: LeggedDriver) -> None:
         """Hand the arms back to the robot's controller, ticking at stream rate."""
         with self._lock:
-            active, self._hands_active = self._hands_active, False
-        if not active:
+            owned = self._arms_owned or self._hands_active
+            self._hands_active = False
+            self._arms_owned = False
+        if not owned:
             return
         hands = self._hands(driver)
         cfg = self._mobile_cfg

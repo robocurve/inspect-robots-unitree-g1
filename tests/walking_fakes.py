@@ -91,10 +91,16 @@ class FakeAtexit:
 
 class FakeSignal:
     SIGTERM = 15
+    SIG_DFL = 0
+    SIG_IGN = 1
 
     def __init__(self, previous: Any = None) -> None:
         self.previous = previous
         self.handlers: list[tuple[int, Any]] = []
+        self.raised: list[int] = []
+
+    def raise_signal(self, signum: int) -> None:
+        self.raised.append(signum)
 
     def getsignal(self, signum: int) -> Any:
         return self.previous
