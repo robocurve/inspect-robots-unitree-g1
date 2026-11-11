@@ -150,7 +150,11 @@ class IsaacLabVelocityDriver:  # pragma: no cover - needs Isaac Sim and a GPU
             self._obs, _, terminated, truncated, _ = self._env.step(action)
             self._sim_time += self._dt
             if bool(terminated.any()) or bool(truncated.any()):
+                # Isaac Lab has already reset the scene: this trial cannot go on.
                 self.resets += 1
+                raise RuntimeError(
+                    "the simulated robot fell or its episode ended; Isaac Lab reset the scene"
+                )
 
     def send_velocity(self, forward: float, left: float, turn: float) -> None:
         """Latch the commanded body velocity; physics steps on the reading thread."""
@@ -366,7 +370,11 @@ class IsaacLabG1MobileDriver:  # pragma: no cover - needs Isaac Sim and a GPU
             _, _, terminated, truncated, _ = self._env.step(tensor.unsqueeze(0))
             self._sim_time += self._dt
             if bool(terminated.any()) or bool(truncated.any()):
+                # Isaac Lab has already reset the scene: this trial cannot go on.
                 self.resets += 1
+                raise RuntimeError(
+                    "the simulated robot fell or its episode ended; Isaac Lab reset the scene"
+                )
 
     # -- walking ------------------------------------------------------------
 
@@ -428,6 +436,10 @@ class IsaacLabG1MobileDriver:  # pragma: no cover - needs Isaac Sim and a GPU
         palms = np.stack([fk(self._arms[0], q[:7]), fk(self._arms[1], q[7:])])
         with self._lock:
             return palms, self._grips.copy()
+
+    def engage_hands(self) -> bool:
+        """Simulation has no controller to take the arms over from."""
+        return True
 
     def release_hands(self) -> bool:
         """Simulation has no controller to hand back to; open the hands."""

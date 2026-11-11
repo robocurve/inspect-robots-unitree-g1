@@ -57,6 +57,14 @@ class HandsDriver(Protocol):
         """Advance handing the arms back to the robot's controller; True when done."""
         ...
 
+    def engage_hands(self) -> bool:
+        """Advance taking the arms over while holding their measured pose; True when done.
+
+        The first call of each takeover reseeds the command baseline from the
+        measured joints, so every reset starts from where the arms really are.
+        """
+        ...
+
 
 class KinematicMobileDriver(KinematicLeggedDriver):
     """The kinematic stand-in plus two arms that follow IK instantly.
@@ -97,6 +105,10 @@ class KinematicMobileDriver(KinematicLeggedDriver):
         with self._arm_lock:
             palms = np.stack([fk(arm, q) for arm, q in zip(self._arms, self._q, strict=True)])
             return palms, self._grips.copy()
+
+    def engage_hands(self) -> bool:
+        """The stand-in has no controller to take over from."""
+        return True
 
     def release_hands(self) -> bool:
         """Drop the arms back to their nominal pose and open the grips."""
@@ -180,8 +192,19 @@ class G1MobileEmbodiment(G1Embodiment):
     # ------------------------------------------------------------------ hooks
 
     def _reset_extra(self, driver: LeggedDriver) -> None:
-        """Glide the palms from where they are to the home pose at hand speed."""
+        """Take the arms over holding their measured pose, then glide the palms home."""
         hands = self._hands(driver)
+        with self._lock:
+            # The streamer stays off the arms until the takeover completes.
+            self._hands_active = False
+        cfg = self._mobile_cfg
+        ticks = math.ceil((cfg.arm_weight_ramp_s + 1.0) * cfg.stream_hz)
+        for _ in range(ticks):
+            if hands.engage_hands():
+                break
+            self._sleep(1.0 / cfg.stream_hz)
+        else:
+            raise RuntimeError("arms did not finish taking over from the robot's controller")
         palms, _ = hands.read_hands()
         palms = np.asarray(palms, dtype=np.float64)
         with self._lock:
@@ -189,7 +212,6 @@ class G1MobileEmbodiment(G1Embodiment):
             self._hand_targets = palms.copy()
             self._grip_targets = np.zeros(2, dtype=np.float64)
             self._hands_active = True
-        cfg = self._mobile_cfg
         step = cfg.hand_speed / cfg.control_hz
         distance = float(np.max(np.linalg.norm(HOME_HANDS - palms, axis=1)))
         count = max(1, math.ceil(distance / step))

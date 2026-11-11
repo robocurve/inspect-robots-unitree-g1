@@ -185,10 +185,11 @@ def test_fresh_odometry_wins_and_velocity_is_rotated_into_the_body_frame() -> No
     np.testing.assert_allclose(state.pose, (1.0, 2.0, math.pi / 2))
     np.testing.assert_allclose(state.velocity, (0.2, 0.0, 0.1), atol=1e-12)
     np.testing.assert_allclose(state.rpy, (0.01, -0.02, 0.4))
-    # Stale odometry falls back to dead reckoning.
+    # Stale odometry falls back to dead reckoning from the last odometry pose.
     clock.now += 1.0
     stale = driver.read_state()
     np.testing.assert_allclose(stale.velocity, 0.0)
+    np.testing.assert_allclose(stale.pose[:2], (1.0, 2.0))
 
 
 def test_dead_reckoning_integrates_commands_on_imu_yaw() -> None:

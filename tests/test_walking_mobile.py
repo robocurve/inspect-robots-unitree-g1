@@ -216,6 +216,13 @@ def test_release_that_never_finishes_is_reported() -> None:
     rig.emb._release_extra(driver)
 
 
+def test_a_takeover_that_never_finishes_is_reported() -> None:
+    rig, driver = mobile_rig()
+    driver.engage_hands = lambda: False  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="did not finish taking over"):
+        rig.reset()
+
+
 # ---------------------------------------------------------------------- real arm driver
 
 
@@ -315,6 +322,10 @@ def test_sdk_driver_drives_dex1_grippers_from_the_measured_stroke() -> None:
     grippers.strokes = [5.4, 2.7]  # left open, right half closed
     palms, grips = driver.read_hands()
     np.testing.assert_allclose(grips, [0.0, 0.5])
+    # Nothing moves, grippers included, until the arms are taken over.
+    while not driver.engage_hands():
+        pass
+    assert grippers.sent == []
     # Close both: strokes start where they are and move at most 2.7/20 rad per tick.
     for _ in range(3):
         driver.send_hands(palms, np.ones(2))
@@ -328,6 +339,8 @@ def test_sdk_driver_drives_dex1_grippers_from_the_measured_stroke() -> None:
     assert len(grippers.sent) == sent
     # A new hand-over starts again from the measured stroke.
     grippers.strokes = [1.0, 1.0]
+    while not driver.engage_hands():
+        pass
     driver.send_hands(palms, np.ones(2))
     np.testing.assert_allclose(grippers.sent[-1], [1.0 - step, 1.0 - step])
     grippers.strokes = [np.nan, 0.0]
@@ -428,3 +441,28 @@ def test_sim_paced_homing_latches_targets_before_physics() -> None:
     obs = rig.reset()
     np.testing.assert_allclose(obs.state["hand_pos"].reshape(2, 3), HOME_HANDS, atol=2e-2)
     rig.emb.close()
+
+
+def test_takeover_holds_the_measured_pose_and_reseeds_on_every_reset() -> None:
+    cfg = G1MobileConfig(arm_weight_ramp_s=0.5, stream_hz=20.0)
+    publisher = FakeArmPublisher()
+    driver = G1MobileSdkDriver(cfg, loco=FakeLoco(), clock=FakeClock(), arm_publisher=publisher)
+    first = np.concatenate([G1_ARMS[0].nominal, G1_ARMS[1].nominal])
+    first[4] = 0.4  # a wrist away from the IK's nominal: it must not move during takeover
+    driver.on_lowstate(lowstate_with_arms(first))
+    far = HOME_HANDS + 0.1
+    # send_hands before takeover holds: it engages and reports the held palms.
+    held = driver.send_hands(far, np.zeros(2))
+    np.testing.assert_allclose(held[0], fk(G1_ARMS[0], first[:7]))
+    while not driver.engage_hands():
+        pass
+    assert driver.weight == 1.0
+    for q, _ in publisher.sent:
+        np.testing.assert_allclose(q, first)  # the measured pose, unchanged, every tick
+    driver.send_hands(far, np.zeros(2))
+    assert not np.allclose(publisher.sent[-1][0], first)  # moves only once engaged
+    # A second reset without close: the baseline is reseeded from the new measured pose.
+    second = first + 0.2
+    driver.on_lowstate(lowstate_with_arms(second))
+    assert driver.engage_hands() is True  # already engaged: reseed and go
+    np.testing.assert_allclose(publisher.sent[-1][0], second)

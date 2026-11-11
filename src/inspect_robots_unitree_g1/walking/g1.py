@@ -132,7 +132,11 @@ class G1LocoDriver:
             (cos * vx + sin * vy, -sin * vx + cos * vy, float(msg.yaw_speed)), dtype=np.float64
         )
         with self._lock:
-            self._odom = (self._clock(), pose, velocity)
+            now = self._clock()
+            self._odom = (now, pose, velocity)
+            # Keep the fallback anchored here, so a stale feed hands over without a jump.
+            self._dead_pose = pose.copy()
+            self._dead_time = now
 
     # ------------------------------------------------------------------ LeggedDriver
 
@@ -280,6 +284,7 @@ class G1MobileSdkDriver(G1LocoDriver):
         self._q_cmd: Vec | None = None
         self._q_solution: list[Vec] | None = None
         self._weight = 0.0
+        self._engaging = False
         one_kp = (cfg.kp_arm,) * 4 + (cfg.kp_wrist,) * 3
         one_kd = (cfg.kd_arm,) * 4 + (cfg.kd_wrist,) * 3
         self._kp = np.asarray(one_kp * 2, dtype=np.float64)
@@ -332,12 +337,38 @@ class G1MobileSdkDriver(G1LocoDriver):
         self._stroke_cmd = self._stroke_cmd + np.clip(desired - self._stroke_cmd, -step, step)
         self._grippers.publish_strokes(self._stroke_cmd.copy())
 
-    def send_hands(self, targets: Vec, grips: Vec) -> Vec:
-        """Solve, rate-limit, ramp the weight toward 1, publish; return reachable palms."""
-        self._send_grips(np.asarray(grips, dtype=np.float64))
-        if self._q_cmd is None:
+    def engage_hands(self) -> bool:
+        """Take the arms over while holding the measured pose; True once fully engaged.
+
+        The first call of each takeover reseeds the command baseline from the
+        measured joints. Each call publishes that held pose and ramps the
+        arm-sdk weight one tick toward 1; nothing moves until the weight is 1.
+        """
+        if not self._engaging:
             self._q_cmd = self._measured_arm_q()
             self._q_solution = [self._q_cmd[:7].copy(), self._q_cmd[7:].copy()]
+            self._stroke_cmd = None
+            self._engaging = True
+        assert self._q_cmd is not None
+        ramp = 1.0 / (self._mobile_cfg.arm_weight_ramp_s * self._mobile_cfg.stream_hz)
+        self._weight = min(1.0, self._weight + ramp)
+        if self._weight > 1.0 - 1e-9:
+            self._weight = 1.0
+        self._arm_publisher.publish(self._q_cmd.copy(), self._weight, self._kp, self._kd)
+        if self._weight < 1.0:
+            return False
+        self._engaging = False
+        return True
+
+    def send_hands(self, targets: Vec, grips: Vec) -> Vec:
+        """Solve, rate-limit and publish; return reachable palms. Holds until engaged."""
+        if self._q_cmd is None or self._weight < 1.0:
+            self.engage_hands()
+            assert self._q_cmd is not None
+            return np.stack(
+                [fk(arm, self._q_cmd[7 * s : 7 * s + 7]) for s, arm in enumerate(self._arms)]
+            )
+        self._send_grips(np.asarray(grips, dtype=np.float64))
         assert self._q_solution is not None
         reached = np.zeros((2, 3), dtype=np.float64)
         for side, arm in enumerate(self._arms):
@@ -347,15 +378,12 @@ class G1MobileSdkDriver(G1LocoDriver):
         desired = np.concatenate(self._q_solution)
         step = self._mobile_cfg.arm_joint_step
         self._q_cmd = self._q_cmd + np.clip(desired - self._q_cmd, -step, step)
-        ramp = 1.0 / (self._mobile_cfg.arm_weight_ramp_s * self._mobile_cfg.stream_hz)
-        self._weight = min(1.0, self._weight + ramp)
-        if self._weight > 1.0 - 1e-9:
-            self._weight = 1.0
         self._arm_publisher.publish(self._q_cmd.copy(), self._weight, self._kp, self._kd)
         return reached
 
     def release_hands(self) -> bool:
         """Hold the last command and ramp the weight down one tick; True at zero."""
+        self._engaging = False
         if self._q_cmd is None:
             self._weight = 0.0
             self._stroke_cmd = None
