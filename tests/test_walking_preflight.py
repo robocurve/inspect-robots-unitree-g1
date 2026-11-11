@@ -58,6 +58,11 @@ def test_healthy_robot_is_ready() -> None:
         ({"strokes": None}, "grippers", "fail", "powered"),
         ({"strokes": np.asarray((6.0, 0.0))}, "grippers", "warn", "outside 0 to 5.4"),
         ({"camera_error": "Again()"}, "camera", "fail", "Again"),
+        ({"rpy": np.asarray((np.nan, 0.0, 0.0))}, "lowstate", "fail", "invalid IMU"),
+        ({"arm_q": np.full(14, np.nan)}, "arms", "fail", "not finite"),
+        ({"arm_q": np.zeros(7)}, "arms", "fail", "wrong count"),
+        ({"odom_pose": np.asarray((np.nan, 0.0, 0.0))}, "odometry", "warn", "not finite"),
+        ({"strokes": np.asarray((np.nan, 0.0))}, "grippers", "fail", "not finite"),
         ({"frame_shape": None}, "camera", "fail", "no frame"),
     ],
 )

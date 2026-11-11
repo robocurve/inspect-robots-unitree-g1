@@ -187,6 +187,7 @@ def test_fresh_odometry_wins_and_velocity_is_rotated_into_the_body_frame() -> No
     np.testing.assert_allclose(state.rpy, (0.01, -0.02, 0.4))
     # Stale odometry falls back to dead reckoning from the last odometry pose.
     clock.now += 1.0
+    driver.on_lowstate(lowstate(yaw=0.4))  # the IMU keeps arriving; only odometry stopped
     stale = driver.read_state()
     np.testing.assert_allclose(stale.velocity, 0.0)
     np.testing.assert_allclose(stale.pose[:2], (1.0, 2.0))
@@ -200,10 +201,20 @@ def test_dead_reckoning_integrates_commands_on_imu_yaw() -> None:
     driver.send_velocity(0.2, 0.1, 0.0)
     driver.on_lowstate(lowstate(yaw=math.pi / 2))
     clock.now += 1.0
+    driver.on_lowstate(lowstate(yaw=math.pi / 2))
     state = driver.read_state()
     # One second facing +y in the world: forward 0.2 -> +y, left 0.1 -> -x.
     np.testing.assert_allclose(state.pose, (-0.1, 0.2, math.pi / 2), atol=1e-12)
     np.testing.assert_allclose(state.velocity, (0.2, 0.1, 0.0))
+
+
+def test_stale_lowstate_stops_the_robot() -> None:
+    driver, _, clock = make_driver()
+    driver.on_lowstate(lowstate())
+    driver.read_state()
+    clock.now += 1.0  # rt/lowstate stopped arriving
+    with pytest.raises(RuntimeError, match=r"rt/lowstate is 1\.00 s old"):
+        driver.read_state()
 
 
 def test_camera_reader_is_required_for_frames() -> None:

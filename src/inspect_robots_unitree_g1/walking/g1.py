@@ -88,6 +88,7 @@ class G1LocoDriver:
         self._closers = tuple(closers)
         self._lock = threading.Lock()
         self._rpy: Vec | None = None
+        self._lowstate_time: float | None = None
         self._odom: tuple[float, Vec, Vec] | None = None  # (time, pose, body velocity)
         self._command = np.zeros(3, dtype=np.float64)
         self._dead_pose = np.zeros(3, dtype=np.float64)
@@ -113,10 +114,19 @@ class G1LocoDriver:
     # ------------------------------------------------------------------ DDS callbacks
 
     def on_lowstate(self, msg: Any) -> None:
-        """Store the IMU attitude from an ``rt/lowstate`` sample."""
+        """Store the IMU attitude from an ``rt/lowstate`` sample, with its arrival time."""
         rpy = np.asarray(msg.imu_state.rpy, dtype=np.float64)
         with self._lock:
             self._rpy = rpy
+            self._lowstate_time = self._clock()
+
+    def _require_fresh_lowstate_locked(self) -> None:
+        """Refuse when rt/lowstate is missing or stale: IMU and arm joints come from it."""
+        if self._rpy is None or self._lowstate_time is None:
+            raise RuntimeError("rt/lowstate has not produced a sample yet")
+        age = self._clock() - self._lowstate_time
+        if age > self._cfg.lowstate_stale_s:
+            raise RuntimeError(f"rt/lowstate is {age:.2f} s old; stopping")
 
     def on_odom(self, msg: Any) -> None:
         """Store pose and body velocity from a SportModeState_ odometry sample.
@@ -158,9 +168,9 @@ class G1LocoDriver:
     def read_state(self) -> LeggedState:
         """Odometry when fresh, otherwise dead reckoning on the IMU yaw."""
         with self._lock:
-            if self._rpy is None:
-                raise RuntimeError("rt/lowstate has not produced a sample yet")
+            self._require_fresh_lowstate_locked()
             self._advance_locked()
+            assert self._rpy is not None
             rpy = self._rpy.copy()
             odom = self._odom
             if odom is not None and self._clock() - odom[0] <= self._cfg.odom_stale_s:
@@ -306,6 +316,7 @@ class G1MobileSdkDriver(G1LocoDriver):
         with self._lock:
             if self._arm_q is None:
                 raise RuntimeError("rt/lowstate has not produced arm joint angles yet")
+            self._require_fresh_lowstate_locked()
             q = self._arm_q.copy()
         if q.shape != (14,) or not np.all(np.isfinite(q)):
             raise ValueError(f"rt/lowstate returned invalid arm joint angles: {q!r}")

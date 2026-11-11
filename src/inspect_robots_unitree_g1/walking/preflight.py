@@ -65,6 +65,12 @@ class Check:
     detail: str
 
 
+def _valid(values: npt.ArrayLike, size: int) -> bool:
+    """Exactly ``size`` finite numbers."""
+    array = np.asarray(values, dtype=np.float64).reshape(-1)
+    return array.shape == (size,) and bool(np.all(np.isfinite(array)))
+
+
 def _fmt(values: npt.ArrayLike) -> str:
     return "(" + ", ".join(f"{float(v):+.3f}" for v in np.asarray(values).reshape(-1)) + ")"
 
@@ -89,6 +95,8 @@ def _locomotion(probe: ProbeResult) -> Check:
 def _lowstate(probe: ProbeResult) -> Check:
     if probe.rpy is None:
         return Check("lowstate", "fail", "no rt/lowstate sample")
+    if not _valid(probe.rpy, 3):
+        return Check("lowstate", "fail", f"invalid IMU reading {probe.rpy!r}")
     roll, pitch = float(probe.rpy[0]), float(probe.rpy[1])
     if max(abs(roll), abs(pitch)) > TILT_WARN_RAD:
         return Check(
@@ -100,6 +108,8 @@ def _lowstate(probe: ProbeResult) -> Check:
 def _arms(cfg: G1MobileConfig, probe: ProbeResult) -> Check:
     if probe.arm_q is None:
         return Check("arms", "fail", "no arm joint angles in rt/lowstate")
+    if not _valid(probe.arm_q, 14):
+        return Check("arms", "fail", "invalid arm joint angles (wrong count or not finite)")
     q = np.asarray(probe.arm_q, dtype=np.float64)
     arms = with_tool_offset(G1_ARMS, cfg.tool_offset_m)
     issues: list[str] = []
@@ -132,6 +142,10 @@ def _odometry(cfg: G1MobileConfig, probe: ProbeResult) -> Check:
             f"last {cfg.odom_topic} sample is {probe.odom_age_s:.2f} s old; "
             "base_pose will be dead-reckoned",
         )
+    if not _valid(probe.odom_pose, 3):
+        return Check(
+            "odometry", "warn", "odometry pose is not finite; base_pose will be dead-reckoned"
+        )
     return Check("odometry", "ok", f"pose {_fmt(probe.odom_pose)}")
 
 
@@ -140,6 +154,8 @@ def _grippers(cfg: G1MobileConfig, probe: ProbeResult) -> Check:
         return Check("grippers", "ok", f"not used (hands={cfg.hands})")
     if probe.strokes is None:
         return Check("grippers", "fail", "no rt/dex1/*/state samples; are the Dex1s powered?")
+    if not _valid(probe.strokes, 2):
+        return Check("grippers", "fail", "invalid Dex1 strokes (wrong count or not finite)")
     strokes = np.asarray(probe.strokes, dtype=np.float64)
     grips = dex1_stroke_to_grip(strokes, cfg.dex1_stroke)
     detail = f"strokes {_fmt(strokes)} rad, grip (0 open, 1 closed) {_fmt(grips)}"

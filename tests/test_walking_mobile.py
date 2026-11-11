@@ -488,3 +488,14 @@ def test_non_finite_arm_joints_are_refused_before_any_command() -> None:
     with pytest.raises(ValueError, match="invalid arm joint angles"):
         driver.engage_hands()
     assert publisher.sent == []
+
+
+def test_stale_arm_joints_are_refused() -> None:
+    clock = FakeClock()
+    driver = G1MobileSdkDriver(
+        G1MobileConfig(), loco=FakeLoco(), clock=clock, arm_publisher=FakeArmPublisher()
+    )
+    driver.on_lowstate(lowstate_with_arms(np.concatenate([G1_ARMS[0].nominal, G1_ARMS[1].nominal])))
+    clock.now += 1.0
+    with pytest.raises(RuntimeError, match="rt/lowstate is"):
+        driver.read_hands()

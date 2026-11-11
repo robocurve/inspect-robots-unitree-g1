@@ -186,12 +186,20 @@ class G1Config(LeggedConfig):
     rpc_timeout_s: float = 0.5
     odom_topic: str = "rt/odommodestate"
     odom_stale_s: float = 0.5
+    #: rt/lowstate (IMU and arm joints) older than this stops the robot: it is required.
+    lowstate_stale_s: float = 0.25
     cam_server_address: str = "tcp://192.168.123.164:5556"
     cam_timeout_s: float = 5.0
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        for name in ("velocity_hold_s", "rpc_timeout_s", "odom_stale_s", "cam_timeout_s"):
+        for name in (
+            "velocity_hold_s",
+            "rpc_timeout_s",
+            "odom_stale_s",
+            "lowstate_stale_s",
+            "cam_timeout_s",
+        ):
             _require_positive(name, getattr(self, name))
         if self.velocity_hold_s * self.stream_hz < 2.0:
             raise ValueError(
