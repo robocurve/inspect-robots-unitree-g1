@@ -12,6 +12,10 @@ The locomotion controller remains responsible for balance, legs, and waist.
 This adapter publishes arm targets to `rt/arm_sdk` and blends them into the
 running controller through the weight joint.
 
+It also registers two walking embodiments for LLM agents, `g1_base` (walking
+only) and `g1_mobile` (walking and both hands in one trial); see
+[Walking: g1_base and g1_mobile](#walking-g1_base-and-g1_mobile).
+
 ## Install
 
 Install the package on the G1 adapter machine:
@@ -209,9 +213,65 @@ including locomotion outputs, are ignored.
 | 15 | right hand | normalized, 1 open |
 
 The scalar hand contract is a deliberate v1 simplification. Dex3 expands the
-scalar along a fixed power-grasp path. Per-joint hand actions, locomotion,
-waist and neck control, 23-DOF G1 arms, GR00T-SONIC, simulation, UnifoLM-VLA,
+scalar along a fixed power-grasp path. Per-joint hand actions, locomotion
+for `g1_arms` (see the walking embodiments below), waist and neck control, 23-DOF G1 arms, GR00T-SONIC, simulation, UnifoLM-VLA,
 and lerobot-served policy backends are future work.
+
+## Walking: g1_base and g1_mobile
+
+Two more embodiments in `inspect_robots_unitree_g1.walking`, designed in
+[plans/0002](plans/0002-g1-walking-design.md). They drive the G1 through its own
+locomotion controller and suit LLM agents that move in small displacements.
+They do not change `g1_arms` or `gr00t`.
+
+**`g1_base`** (3-D `joint_delta`, the body's planar degrees of freedom): each
+action is one control step's displacement `(base_forward m, base_left m,
+base_turn rad)`. The bound is the speed cap over `control_hz` (defaults 0.3 m/s
+forward, 0.2 m/s backward and sideways, 0.5 rad/s turn, 10 Hz). State:
+`base_pose` (odometry from the reset pose), `base_vel`, `body_rpy`; one camera,
+`head_cam`.
+
+**`g1_mobile`** (11-D `eef_delta_pos`): the three walking dimensions, then each
+palm's per-step displacement in the torso frame (`left_hand_x/y/z`,
+`right_hand_x/y/z`), then `left_grip` and `right_grip` (0 open, 1 closed). The
+embodiment owns the palm targets, clamps them to a workspace box, and adopts
+the reachable palm the IK reports, so pushing past reach never winds a target
+up. Position-only IK on the 29-DoF arm from Unitree's URDF moves shoulder and
+elbow and holds the wrist. State adds `hand_pos` and `grip`.
+
+Backends (`-E backend=...`):
+
+| `backend` | What it is |
+|---|---|
+| `sdk` | Real G1. Walking through `LocoClient.SetVelocity` with a 0.3 s on-robot hold, so the robot stops by itself when commands stop. Arms over `rt/arm_sdk` with the same weight ramp as `g1_arms`. `hands=dex1` drives Dex1-1 grippers over `rt/dex1/*/cmd`. The adapter never changes the robot's mode. |
+| `kinematic` | Dependency-free stand-in for mock runs on any machine. |
+| `isaaclab` | Isaac Lab on sim time. `g1_base` uses the velocity task with its pretrained policy; `g1_mobile` uses the locomanipulation scene with its Agile lower-body policy, and with `hands=dex1 -E isaac_robot_usd=PATH` a G1 with Dex1-1 grippers converted from unitree_ros `g1_29dof_mode_15_with_dex1_1.urdf`. Needs an NVIDIA RTX GPU. |
+
+Verified in Isaac with an LLM agent: walking to a target; walking to a table
+and moving a cube (Dex3); walking to a table, grasping and lifting a cube
+(Dex1-1). Nothing in these embodiments has run on a physical G1 yet.
+
+### First run on a real G1
+
+1. **Read-only check.** With the robot standing in walking mode (set with the
+   Unitree remote), on the machine wired to it:
+   `inspect-robots-unitree-g1-robot-check -E network_interface=<iface> -E hands=dex1`.
+   It listens to `rt/lowstate`, odometry and the Dex1 state topics, asks the
+   locomotion service for its FSM id and reads one head camera frame. It
+   creates no publisher and sends nothing, and ends with READY or what is
+   missing.
+2. **Walking only, slowly, on a gantry or with a spotter, remote in hand:**
+   `inspect-robots run --policy agent --embodiment g1_base -E backend=sdk
+   -E network_interface=<iface> -E max_forward_speed=0.15 -E geofence_m=1.0 ...`
+   Leave `unattended` off so the operator prompts appear.
+3. **Arms (`g1_mobile`), still on the gantry.** Arms take over from the
+   measured pose and the weight ramps in over 2 s. Try one hand move before
+   any walking.
+
+Unverified until then: the odometry topic and frame, the FSM ids, whether
+Unitree's AES key changes how the SDK connects, the Dex1-1 direction, the
+Dex1-1 grasp point (`tool_offset_m`), and the G1 "mode" (mode 15 wrists sit
+5 mm further out than the rev 1.0 arm model the IK uses).
 
 ## Development
 
