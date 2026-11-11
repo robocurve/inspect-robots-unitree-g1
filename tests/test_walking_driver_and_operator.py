@@ -4,23 +4,27 @@ import numpy as np
 import pytest
 from inspect_robots.errors import EmbodimentFault
 
-from inspect_robots_unitree_g1.walking.config import Go1Config
-from inspect_robots_unitree_g1.walking.driver import Go1Driver, KinematicGo1Driver, render_top_down
-from inspect_robots_unitree_g1.walking.operator import OperatorIO
+from inspect_robots_unitree_g1.operator import OperatorIO
+from inspect_robots_unitree_g1.walking.config import LeggedConfig
+from inspect_robots_unitree_g1.walking.driver import (
+    KinematicLeggedDriver,
+    LeggedDriver,
+    render_top_down,
+)
 from walking_fakes import FakeClock
 
 
-def make(tau: float = 0.0) -> tuple[KinematicGo1Driver, FakeClock]:
+def make(tau: float = 0.0) -> tuple[KinematicLeggedDriver, FakeClock]:
     clock = FakeClock()
-    driver = KinematicGo1Driver(
-        Go1Config(camera_height=48, camera_width=64), clock=clock, response_time_s=tau
+    driver = KinematicLeggedDriver(
+        LeggedConfig(camera_height=48, camera_width=64), clock=clock, response_time_s=tau
     )
     return driver, clock
 
 
 def test_kinematic_driver_satisfies_protocol() -> None:
     driver, _ = make()
-    assert isinstance(driver, Go1Driver)
+    assert isinstance(driver, LeggedDriver)
 
 
 def test_walks_forward_then_turns() -> None:

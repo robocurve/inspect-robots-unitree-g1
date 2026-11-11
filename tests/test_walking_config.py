@@ -3,14 +3,14 @@ import pytest
 
 from inspect_robots_unitree_g1.walking.config import (
     DIM_LABELS,
-    Go1Config,
+    LeggedConfig,
     action_box,
     observation_space,
 )
 
 
 def test_defaults_give_per_step_bounds_from_speed_caps() -> None:
-    cfg = Go1Config()
+    cfg = LeggedConfig()
     np.testing.assert_allclose(cfg.high, (0.05, 0.03, 0.1))
     np.testing.assert_allclose(cfg.low, (-0.03, -0.03, -0.1))
     box = action_box()
@@ -21,12 +21,12 @@ def test_defaults_give_per_step_bounds_from_speed_caps() -> None:
 
 
 def test_bounds_scale_with_control_rate() -> None:
-    cfg = Go1Config(control_hz=5.0, max_forward_speed=1.0)
+    cfg = LeggedConfig(control_hz=5.0, max_forward_speed=1.0)
     assert cfg.high[0] == pytest.approx(0.2)
 
 
 def test_observation_space_follows_camera_config() -> None:
-    space = observation_space(Go1Config(camera_name="head", camera_height=10, camera_width=20))
+    space = observation_space(LeggedConfig(camera_name="head", camera_height=10, camera_width=20))
     assert space.camera_names == frozenset({"head"})
     assert space.cameras[0].height == 10
     assert space.state_keys == frozenset({"base_pose", "base_vel", "body_rpy"})
@@ -34,14 +34,14 @@ def test_observation_space_follows_camera_config() -> None:
 
 
 def test_from_kwargs_coerces_cli_strings() -> None:
-    cfg = Go1Config.from_kwargs(
+    cfg = LeggedConfig.from_kwargs(
         backend="kinematic",
         control_hz="20",
         unattended="yes",
         headless="off",
         geofence_m="none",
         camera_height="240",
-        robot_ip="10.0.0.2",
+        isaac_task="Isaac-Custom-v0",
         max_turn_rate=0.5,
     )
     assert cfg.backend == "kinematic"
@@ -50,16 +50,16 @@ def test_from_kwargs_coerces_cli_strings() -> None:
     assert cfg.headless is False
     assert cfg.geofence_m is None
     assert cfg.camera_height == 240
-    assert cfg.robot_ip == "10.0.0.2"
+    assert cfg.isaac_task == "Isaac-Custom-v0"
     assert cfg.max_turn_rate == 0.5
-    assert Go1Config.from_kwargs(geofence_m="2.5").geofence_m == 2.5
+    assert LeggedConfig.from_kwargs(geofence_m="2.5").geofence_m == 2.5
 
 
 def test_from_kwargs_rejects_unknown_and_bad_booleans() -> None:
-    with pytest.raises(TypeError, match="unknown Go1Config option"):
-        Go1Config.from_kwargs(speed=1)
+    with pytest.raises(TypeError, match="unknown LeggedConfig option"):
+        LeggedConfig.from_kwargs(speed=1)
     with pytest.raises(ValueError, match="must be a boolean"):
-        Go1Config.from_kwargs(unattended="maybe")
+        LeggedConfig.from_kwargs(unattended="maybe")
 
 
 @pytest.mark.parametrize(
@@ -77,4 +77,4 @@ def test_from_kwargs_rejects_unknown_and_bad_booleans() -> None:
 )
 def test_invalid_config_rejected(kwargs: dict[str, object], message: str) -> None:
     with pytest.raises(ValueError, match=message):
-        Go1Config(**kwargs)  # type: ignore[arg-type]
+        LeggedConfig(**kwargs)  # type: ignore[arg-type]

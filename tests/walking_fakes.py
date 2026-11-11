@@ -8,10 +8,10 @@ from typing import Any
 import numpy as np
 from inspect_robots.scene import Scene
 
-from inspect_robots_unitree_g1.walking.config import Go1Config, LeggedConfig
-from inspect_robots_unitree_g1.walking.driver import Go1State
-from inspect_robots_unitree_g1.walking.embodiment import Go1Embodiment
-from inspect_robots_unitree_g1.walking.operator import OperatorIO
+from inspect_robots_unitree_g1.operator import OperatorIO
+from inspect_robots_unitree_g1.walking.config import LeggedConfig
+from inspect_robots_unitree_g1.walking.driver import LeggedState
+from inspect_robots_unitree_g1.walking.embodiment import LeggedEmbodiment
 
 
 class FakeClock:
@@ -49,10 +49,12 @@ class FakeDriver:
         if self.stand_error is not None:
             raise self.stand_error
 
-    def read_state(self) -> Go1State:
+    def read_state(self) -> LeggedState:
         if self.state_error is not None:
             raise self.state_error
-        return Go1State(pose=self.pose.copy(), velocity=self.velocity.copy(), rpy=self.rpy.copy())
+        return LeggedState(
+            pose=self.pose.copy(), velocity=self.velocity.copy(), rpy=self.rpy.copy()
+        )
 
     def read_frame(self) -> np.ndarray:
         return self.frame
@@ -109,10 +111,10 @@ class Rig:
         self,
         cfg: LeggedConfig | None = None,
         *,
-        embodiment_cls: type[Go1Embodiment] = Go1Embodiment,
+        embodiment_cls: type[LeggedEmbodiment] = LeggedEmbodiment,
         **overrides: Any,
     ) -> None:
-        self.cfg = cfg or Go1Config(unattended=True)
+        self.cfg = cfg or LeggedConfig(unattended=True)
         self.driver = FakeDriver(self.cfg.camera_height, self.cfg.camera_width)
         self.clock = FakeClock()
         self.threads: list[ManualThread] = []

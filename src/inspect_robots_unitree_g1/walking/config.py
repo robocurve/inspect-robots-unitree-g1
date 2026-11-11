@@ -1,4 +1,4 @@
-"""Frozen walking-robot configurations (Go1, G1) and the spaces derived from them.
+"""Frozen walking-robot configurations (shared base, G1) and the spaces derived from them.
 
 The action is a per-control-step body displacement ``(forward m, left m,
 turn rad)``. It is declared as ``joint_delta`` because Inspect Robots has no
@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, fields
-from typing import Any, ClassVar, Literal, Self
+from typing import Any, ClassVar, Literal, Self, cast
 
 import numpy as np
 import numpy.typing as npt
@@ -24,10 +24,15 @@ from inspect_robots.spaces import (
     StateSpec,
 )
 
+from inspect_robots_unitree_g1.config import G1Config as _ArmsConfig
+
+#: g1_arms' Dex1-1 configuration, whose defaults the walking G1 reuses.
+_ARMS_DEX1 = _ArmsConfig(hand_type="dex1")
+
 Backend = Literal["sdk", "kinematic", "isaaclab"]
 BACKENDS: tuple[str, ...] = ("sdk", "kinematic", "isaaclab")
 
-#: Action dimension names, in order. Positive forward is the nose direction,
+#: Action dimension names, in order. Positive forward is the front of the body,
 #: positive left is the robot's left, positive turn is counter-clockwise seen
 #: from above.
 DIM_LABELS: tuple[str, str, str] = ("base_forward", "base_left", "base_turn")
@@ -70,8 +75,8 @@ class LeggedConfig:
     """
 
     #: Isaac Lab camera mount: the body link and its offset in metres.
-    ISAAC_CAMERA_LINK: ClassVar[str] = "trunk"
-    ISAAC_CAMERA_POS: ClassVar[tuple[float, float, float]] = (0.28, 0.0, 0.05)
+    ISAAC_CAMERA_LINK: ClassVar[str] = "torso_link"
+    ISAAC_CAMERA_POS: ClassVar[tuple[float, float, float]] = (0.08, 0.0, 0.45)
 
     backend: Backend = "sdk"
     control_hz: float = 10.0
@@ -88,7 +93,7 @@ class LeggedConfig:
     unattended: bool = False
     docs_extra: str = ""
     # Isaac Lab backend.
-    isaac_task: str = "Isaac-Velocity-Flat-Unitree-Go1-Play-v0"
+    isaac_task: str = "Isaac-Velocity-Flat-G1-Play-v0"
     isaac_checkpoint: str = ""
     headless: bool = True
     #: Place coloured boxes in the Isaac scene so camera-driven policies have targets.
@@ -155,20 +160,11 @@ class LeggedConfig:
 
 
 @dataclass(frozen=True)
-class Go1Config(LeggedConfig):
-    """Unitree Go1 quadruped over the legacy ``unitree_legged_sdk`` high-level UDP link."""
-
-    robot_ip: str = "192.168.123.161"
-    robot_port: int = 8082
-    local_port: int = 8080
-
-
-@dataclass(frozen=True)
 class G1Config(LeggedConfig):
     """Unitree G1 humanoid walking under its built-in locomotion controller.
 
     Speed caps start well below the controller's limits: a humanoid that trips
-    falls. ``stream_hz`` is lower than the Go1's because each command is a DDS
+    falls. ``stream_hz`` is lower than the shared default because each command is a DDS
     RPC round trip. ``velocity_hold_s`` is the duration sent with every
     velocity command; the robot itself stops when it lapses, so it stops even
     if this process is killed outright.
@@ -268,14 +264,11 @@ class G1MobileConfig(G1Config):
     #: isaaclab backend with hands=dex1: a G1 USD with Dex1-1 grippers,
     #: converted from unitree_ros g1_29dof_mode_15_with_dex1_1.urdf.
     isaac_robot_usd: str = ""
-    # Dex1-1 gripper, the same figures g1_arms uses (config.py, packing.py):
-    # xr_teleoperate@7dc9aa1a6edb robot_hand_unitree.py records 0 rad as
-    # closed, 5.4 rad as open, and kp 5.0, kd 0.05. The 2.7 rad/s speed cap
-    # is the conservative choice g1_arms makes.
-    dex1_stroke: float = 5.4
-    dex1_max_speed: float = 2.7
-    dex1_kp: float = 5.0
-    dex1_kd: float = 0.05
+    # Dex1-1 gripper: g1_arms' own defaults (see its config for the sources).
+    dex1_stroke: float = _ARMS_DEX1.dex1_stroke
+    dex1_max_speed: float = _ARMS_DEX1.dex1_max_speed
+    dex1_kp: float = cast(float, _ARMS_DEX1.hand_kp)
+    dex1_kd: float = cast(float, _ARMS_DEX1.hand_kd)
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -399,7 +392,7 @@ def _coerce(key: str, value: Any, default: Any) -> Any:
 
 def action_box(cfg: LeggedConfig | None = None) -> Box:
     """Build the 3-D per-step body displacement action space."""
-    resolved = cfg if cfg is not None else Go1Config()
+    resolved = cfg if cfg is not None else LeggedConfig()
     return Box(
         shape=(ACTION_DIM,), low=resolved.low, high=resolved.high, semantics=ACTION_SEMANTICS
     )
@@ -407,7 +400,7 @@ def action_box(cfg: LeggedConfig | None = None) -> Box:
 
 def observation_space(cfg: LeggedConfig | None = None) -> ObservationSpace:
     """Build the one-camera, odometry-and-IMU observation contract."""
-    resolved = cfg if cfg is not None else Go1Config()
+    resolved = cfg if cfg is not None else LeggedConfig()
     return ObservationSpace(
         cameras=(
             CameraSpec(

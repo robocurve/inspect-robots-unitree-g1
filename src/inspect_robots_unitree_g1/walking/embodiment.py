@@ -1,4 +1,4 @@
-"""Unitree Go1 embodiment: walk the body by small, watched displacements.
+"""Walking embodiments: steer a body by small, watched displacements.
 
 Each action is one control period's body displacement ``(forward m, left m,
 turn rad)``. ``step()`` clamps it, converts it to a body velocity, hands that
@@ -33,32 +33,31 @@ from inspect_robots.scene import Scene
 from inspect_robots.types import Action, Observation, StepResult
 
 from inspect_robots_unitree_g1._unitree import UNITREE_INSTALL_COMMAND
+from inspect_robots_unitree_g1.operator import OperatorIO, default_poll_end
 from inspect_robots_unitree_g1.walking.config import (
     ACTION_DIM,
     POSE_KEY,
     RPY_KEY,
     VEL_KEY,
     G1Config,
-    Go1Config,
     LeggedConfig,
 )
 from inspect_robots_unitree_g1.walking.driver import (
     DriverFactory,
-    Go1Driver,
-    Go1State,
+    LeggedDriver,
+    LeggedState,
     default_driver_factory,
 )
-from inspect_robots_unitree_g1.walking.operator import OperatorIO, default_poll_end
 
 Vec = npt.NDArray[np.float64]
 CameraReader = Callable[[], npt.NDArray[np.uint8]]
 ThreadFactory = Callable[[Callable[[], None]], Any]
 
-_DOCS = """A Unitree Go1 quadruped walking on flat ground. Its own walking
-controller handles the legs and balance; you only steer the body.
+_DOCS = """A robot walking on flat ground. Its own walking controller handles
+the legs and balance; you only steer the body.
 Each action is how far the body should move during one control step, in the
 robot's own frame at the start of that step:
-- base_forward: metres toward the nose (negative walks backward).
+- base_forward: metres toward the front of the body (negative walks backward).
 - base_left: metres toward the robot's left side (negative steps right).
 - base_turn: radians of turn, positive counter-clockwise seen from above.
 A move can be larger than one step's bound; it is split into steps at full
@@ -93,25 +92,25 @@ def _thread_factory(target: Callable[[], None]) -> threading.Thread:  # pragma: 
     return thread
 
 
-class Go1Embodiment:
-    """Inspect Robots embodiment for a Go1 body steered through planar velocity.
+class LeggedEmbodiment:
+    """Shared base: a walking body steered through planar velocity.
 
     Other walking robots subclass it and override the class attributes below;
     the stepping, streaming, watchdog, geofence and teardown logic is shared.
     """
 
-    NAME: ClassVar[str] = "go1_base"
-    LABEL: ClassVar[str] = "Go1"
-    MORPHOLOGY: ClassVar[str] = "unitree-go1"
-    ENV_PREFIX: ClassVar[str] = "go1"
-    CONFIG_CLS: ClassVar[type[LeggedConfig]] = Go1Config
+    NAME: ClassVar[str] = "legged_base"
+    LABEL: ClassVar[str] = "Robot"
+    MORPHOLOGY: ClassVar[str] = "legged"
+    ENV_PREFIX: ClassVar[str] = "legged"
+    CONFIG_CLS: ClassVar[type[LeggedConfig]] = LeggedConfig
     DOCS: ClassVar[str] = _DOCS
     READY_PROMPT: ClassVar[str] = (
-        "The Go1 will stand and accept walking commands. Clear the area, then press Enter..."
+        "The robot will stand and accept walking commands. Clear the area, then press Enter..."
     )
 
     # Empty on purpose: each backend has different needs (none for kinematic,
-    # robot_interface for sdk, Isaac Lab for isaaclab), and doctor checks this
+    # the robot SDK for sdk, Isaac Lab for isaaclab), and doctor checks this
     # without knowing the backend. Backends raise their own install hint.
     RUNTIME_REQUIREMENTS: ClassVar[Mapping[str, str]] = {}
 
@@ -147,7 +146,7 @@ class Go1Embodiment:
         self._thread_factory = thread_factory or _thread_factory
         self._atexit = atexit_module
         self._signal = signal_module
-        self._driver: Go1Driver | None = None
+        self._driver: LeggedDriver | None = None
         self._lock = threading.Lock()
         self._command = np.zeros(ACTION_DIM, dtype=np.float64)
         self._deadline = -math.inf
@@ -155,7 +154,7 @@ class Go1Embodiment:
         self._stop_streamer = threading.Event()
         self._streamer: Any = None
         self._stream_error: BaseException | None = None
-        self._origin: Go1State | None = None
+        self._origin: LeggedState | None = None
         self._instruction: str | None = None
         self._backstops_registered = False
         self._previous_sigterm: Any = None
@@ -349,20 +348,20 @@ class Go1Embodiment:
     # Subclasses that drive more than the base (arms, hands) override these. The
     # base embodiment has nothing extra: every hook is a no-op.
 
-    def _reset_extra(self, driver: Go1Driver) -> None:
+    def _reset_extra(self, driver: LeggedDriver) -> None:
         """Bring extra effectors to their start pose after the robot stands."""
 
     def _apply_extra_locked(self, extra: Vec) -> None:
         """Take the clamped action values after the base three (lock held)."""
 
-    def _stream_extra(self, driver: Go1Driver) -> None:
+    def _stream_extra(self, driver: LeggedDriver) -> None:
         """Send extra effector commands on every streamer tick."""
 
-    def _extra_state(self, driver: Go1Driver) -> dict[str, Vec]:
+    def _extra_state(self, driver: LeggedDriver) -> dict[str, Vec]:
         """Extra proprioception for the observation."""
         return {}
 
-    def _release_extra(self, driver: Go1Driver) -> None:
+    def _release_extra(self, driver: LeggedDriver) -> None:
         """Hand extra effectors back safely during close, after the streamer stops."""
 
     def _stream_loop(self) -> None:
@@ -439,13 +438,13 @@ class Go1Embodiment:
             if callable(previous):
                 previous(signum, frame)
 
-    def _require_driver(self) -> Go1Driver:
+    def _require_driver(self) -> LeggedDriver:
         if self._driver is None:
             raise RuntimeError("step() called before reset() (or after close())")
         return self._driver
 
     @staticmethod
-    def _read_state(driver: Go1Driver) -> Go1State:
+    def _read_state(driver: LeggedDriver) -> LeggedState:
         state = driver.read_state()
         for name in ("pose", "velocity", "rpy"):
             values = np.asarray(getattr(state, name), dtype=np.float64)
@@ -453,7 +452,7 @@ class Go1Embodiment:
                 raise ValueError(f"backend returned invalid {name}: {values!r}")
         return state
 
-    def _relative_pose(self, state: Go1State) -> Vec:
+    def _relative_pose(self, state: LeggedState) -> Vec:
         origin = self._origin if self._origin is not None else state
         dx, dy = float(state.pose[0] - origin.pose[0]), float(state.pose[1] - origin.pose[1])
         yaw0 = float(origin.pose[2])
@@ -487,7 +486,7 @@ class Go1Embodiment:
         )
 
 
-class G1Embodiment(Go1Embodiment):
+class G1Embodiment(LeggedEmbodiment):
     """A Unitree G1 humanoid walked through its built-in locomotion controller."""
 
     NAME: ClassVar[str] = "g1_base"

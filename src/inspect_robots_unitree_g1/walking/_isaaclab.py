@@ -1,4 +1,4 @@
-"""Isaac Lab backend: a simulated Go1 or G1 walking under a trained velocity policy.
+"""Isaac Lab backend: a simulated G1 walking under a trained velocity policy.
 
 Runs the configured Isaac Lab velocity-tracking task with one environment. The task's
 own command generator is frozen, and its base-velocity command is overwritten
@@ -26,7 +26,7 @@ import numpy as np  # pragma: no cover
 import numpy.typing as npt  # pragma: no cover
 
 from inspect_robots_unitree_g1.walking.config import LeggedConfig  # pragma: no cover
-from inspect_robots_unitree_g1.walking.driver import Go1State  # pragma: no cover
+from inspect_robots_unitree_g1.walking.driver import LeggedState  # pragma: no cover
 
 _APP: Any = None  # pragma: no cover
 
@@ -71,8 +71,8 @@ def _add_props(env_cfg: Any, sim_utils: Any) -> None:  # pragma: no cover - need
         )
 
 
-class IsaacLabGo1Driver:  # pragma: no cover - needs Isaac Sim and a GPU
-    """Go1Driver backed by one Isaac Lab velocity-task environment."""
+class IsaacLabVelocityDriver:  # pragma: no cover - needs Isaac Sim and a GPU
+    """LeggedDriver backed by one Isaac Lab velocity-task environment."""
 
     def __init__(self, cfg: LeggedConfig) -> None:
         if not cfg.isaac_checkpoint:
@@ -161,7 +161,7 @@ class IsaacLabGo1Driver:  # pragma: no cover - needs Isaac Sim and a GPU
         """Latch a zero velocity command."""
         self.send_velocity(0.0, 0.0, 0.0)
 
-    def read_state(self) -> Go1State:
+    def read_state(self) -> LeggedState:
         """Read root pose, body velocity and attitude at the current sim time."""
         robot = self._env.unwrapped.scene["robot"].data
         pos = robot.root_pos_w[0].cpu().numpy()
@@ -172,7 +172,7 @@ class IsaacLabGo1Driver:  # pragma: no cover - needs Isaac Sim and a GPU
         yaw = float(np.arctan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z)))
         lin = robot.root_lin_vel_b[0].cpu().numpy()
         ang = robot.root_ang_vel_b[0].cpu().numpy()
-        return Go1State(
+        return LeggedState(
             pose=np.asarray((pos[0], pos[1], yaw), dtype=np.float64),
             velocity=np.asarray((lin[0], lin[1], ang[2]), dtype=np.float64),
             rpy=np.asarray((roll, pitch, yaw), dtype=np.float64),
@@ -379,7 +379,7 @@ class IsaacLabG1MobileDriver:  # pragma: no cover - needs Isaac Sim and a GPU
         """Latch zero velocity."""
         self.send_velocity(0.0, 0.0, 0.0)
 
-    def read_state(self) -> Go1State:
+    def read_state(self) -> LeggedState:
         """Root pose, body velocity and attitude at the current sim time."""
         data = self._env.scene["robot"].data
         pos = data.root_pos_w[0].cpu().numpy()
@@ -389,7 +389,7 @@ class IsaacLabG1MobileDriver:  # pragma: no cover - needs Isaac Sim and a GPU
         yaw = float(np.arctan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z)))
         lin = data.root_lin_vel_b[0].cpu().numpy()
         ang = data.root_ang_vel_b[0].cpu().numpy()
-        return Go1State(
+        return LeggedState(
             pose=np.asarray((pos[0], pos[1], yaw), dtype=np.float64),
             velocity=np.asarray((lin[0], lin[1], ang[2]), dtype=np.float64),
             rpy=np.asarray((roll, pitch, yaw), dtype=np.float64),

@@ -27,7 +27,6 @@ from inspect_robots_unitree_g1.walking.arm_kinematics import G1_ARMS, fk, with_t
 from inspect_robots_unitree_g1.walking.config import G1MobileConfig
 from inspect_robots_unitree_g1.walking.g1 import (
     LIMP_FSM_IDS,
-    UNITREE_SDK2_INSTALL,
     dex1_stroke_to_grip,
 )
 from inspect_robots_unitree_g1.walking.mobile import HOME_HANDS
@@ -226,13 +225,13 @@ def probe_robot(cfg: G1MobileConfig, seconds: float) -> ProbeResult:  # pragma: 
     import threading
     import time
 
-    try:
-        from unitree_sdk2py.core.channel import ChannelFactoryInitialize, ChannelSubscriber
-        from unitree_sdk2py.g1.loco.g1_loco_client import LocoClient
-        from unitree_sdk2py.idl.unitree_go.msg.dds_ import MotorStates_, SportModeState_
-        from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowState_
-    except ModuleNotFoundError as exc:
-        raise ModuleNotFoundError(f"unitree_sdk2py is missing. {UNITREE_SDK2_INSTALL}") from exc
+    from inspect_robots_unitree_g1._unitree import _load_unitree
+
+    _load_unitree()
+    from unitree_sdk2py.core.channel import ChannelFactoryInitialize, ChannelSubscriber
+    from unitree_sdk2py.g1.loco.g1_loco_client import LocoClient
+    from unitree_sdk2py.idl.unitree_go.msg.dds_ import MotorStates_, SportModeState_
+    from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowState_
 
     from inspect_robots_unitree_g1.walking.g1 import (
         ARM_MOTOR_INDICES,

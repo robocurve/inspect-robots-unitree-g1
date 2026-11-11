@@ -32,7 +32,7 @@ from inspect_robots_unitree_g1.walking.config import (
     G1MobileConfig,
     LeggedConfig,
 )
-from inspect_robots_unitree_g1.walking.driver import Go1Driver, KinematicGo1Driver
+from inspect_robots_unitree_g1.walking.driver import KinematicLeggedDriver, LeggedDriver
 from inspect_robots_unitree_g1.walking.embodiment import G1Embodiment
 
 Vec = npt.NDArray[np.float64]
@@ -58,7 +58,7 @@ class HandsDriver(Protocol):
         ...
 
 
-class KinematicMobileDriver(KinematicGo1Driver):
+class KinematicMobileDriver(KinematicLeggedDriver):
     """The kinematic stand-in plus two arms that follow IK instantly.
 
     It runs the real G1 arm IK, so mock runs exercise reachability and the
@@ -170,7 +170,7 @@ class G1MobileEmbodiment(G1Embodiment):
         return self._cfg
 
     @staticmethod
-    def _hands(driver: Go1Driver) -> HandsDriver:
+    def _hands(driver: LeggedDriver) -> HandsDriver:
         if not isinstance(driver, HandsDriver):
             raise TypeError(
                 f"g1_mobile needs a backend that drives arms; got {type(driver).__name__}"
@@ -179,7 +179,7 @@ class G1MobileEmbodiment(G1Embodiment):
 
     # ------------------------------------------------------------------ hooks
 
-    def _reset_extra(self, driver: Go1Driver) -> None:
+    def _reset_extra(self, driver: LeggedDriver) -> None:
         """Glide the palms from where they are to the home pose at hand speed."""
         hands = self._hands(driver)
         palms, _ = hands.read_hands()
@@ -211,7 +211,7 @@ class G1MobileEmbodiment(G1Embodiment):
         self._hand_targets = np.clip(moved, low, high)
         self._grip_targets = np.clip(self._grip_targets + extra[6:8], 0.0, 1.0)
 
-    def _stream_extra(self, driver: Go1Driver) -> None:
+    def _stream_extra(self, driver: LeggedDriver) -> None:
         """Send the current targets and adopt the reachable palms as targets."""
         hands = self._hands(driver)
         with self._lock:
@@ -227,7 +227,7 @@ class G1MobileEmbodiment(G1Embodiment):
             if np.array_equal(self._hand_targets, targets):
                 self._hand_targets = reached
 
-    def _extra_state(self, driver: Go1Driver) -> dict[str, Vec]:
+    def _extra_state(self, driver: LeggedDriver) -> dict[str, Vec]:
         """Measured palm positions and grips."""
         palms, grips = self._hands(driver).read_hands()
         palms = np.asarray(palms, dtype=np.float64)
@@ -238,7 +238,7 @@ class G1MobileEmbodiment(G1Embodiment):
             raise ValueError("backend returned non-finite hand state")
         return {HANDS_KEY: palms.reshape(6), GRIPS_KEY: grips}
 
-    def _release_extra(self, driver: Go1Driver) -> None:
+    def _release_extra(self, driver: LeggedDriver) -> None:
         """Hand the arms back to the robot's controller, ticking at stream rate."""
         with self._lock:
             active, self._hands_active = self._hands_active, False

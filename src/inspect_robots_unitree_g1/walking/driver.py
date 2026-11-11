@@ -20,21 +20,14 @@ import numpy.typing as npt
 from inspect_robots_unitree_g1.walking.config import (
     G1Config,
     G1MobileConfig,
-    Go1Config,
     LeggedConfig,
 )
 
 Vec = npt.NDArray[np.float64]
 
-ROBOT_INTERFACE_INSTALL = (
-    "Build unitree_legged_sdk v3.8 with Python bindings "
-    "(https://github.com/unitreerobotics/unitree_legged_sdk, branch v3.8.0, "
-    "cmake -DPYTHON_BUILD=TRUE) and put the built robot_interface module on PYTHONPATH"
-)
-
 
 @dataclass(frozen=True)
-class Go1State:
+class LeggedState:
     """One state sample in the backend's own odometry frame.
 
     ``pose`` is ``(x m, y m, yaw rad)``, ``velocity`` is the body-frame
@@ -47,7 +40,7 @@ class Go1State:
 
 
 @runtime_checkable
-class Go1Driver(Protocol):
+class LeggedDriver(Protocol):
     """The minimal backend surface the embodiment needs."""
 
     def send_velocity(self, forward: float, left: float, turn: float) -> None:
@@ -58,7 +51,7 @@ class Go1Driver(Protocol):
         """Command zero velocity and a stable standing posture."""
         ...
 
-    def read_state(self) -> Go1State:
+    def read_state(self) -> LeggedState:
         """Return the latest odometry and IMU sample."""
         ...
 
@@ -71,10 +64,10 @@ class Go1Driver(Protocol):
         ...
 
 
-DriverFactory = Callable[[LeggedConfig], Go1Driver]
+DriverFactory = Callable[[LeggedConfig], LeggedDriver]
 
 
-class KinematicGo1Driver:
+class KinematicLeggedDriver:
     """A dependency-free stand-in that integrates commanded velocity over time.
 
     It models the walking controller as a first-order lag toward the commanded
@@ -128,11 +121,11 @@ class KinematicGo1Driver:
         """Advance the model, then command zero velocity."""
         self.send_velocity(0.0, 0.0, 0.0)
 
-    def read_state(self) -> Go1State:
+    def read_state(self) -> LeggedState:
         """Advance the model and report pose, velocity and a level IMU."""
         with self._lock:
             self._advance_locked()
-            return Go1State(
+            return LeggedState(
                 pose=self._pose.copy(),
                 velocity=self._velocity.copy(),
                 rpy=np.asarray((0.0, 0.0, self._pose[2]), dtype=np.float64),
@@ -179,7 +172,7 @@ def render_top_down(
     return frame
 
 
-def default_driver_factory(cfg: LeggedConfig) -> Go1Driver:  # pragma: no cover - backends
+def default_driver_factory(cfg: LeggedConfig) -> LeggedDriver:  # pragma: no cover - backends
     """Build the backend named by ``cfg.backend`` for the robot the config describes."""
     if cfg.backend == "kinematic":
         import time
@@ -188,15 +181,15 @@ def default_driver_factory(cfg: LeggedConfig) -> Go1Driver:  # pragma: no cover 
             from inspect_robots_unitree_g1.walking.mobile import KinematicMobileDriver
 
             return KinematicMobileDriver(cfg, clock=time.monotonic)
-        return KinematicGo1Driver(cfg, clock=time.monotonic)
+        return KinematicLeggedDriver(cfg, clock=time.monotonic)
     if cfg.backend == "isaaclab" and isinstance(cfg, G1MobileConfig):
         from inspect_robots_unitree_g1.walking._isaaclab import IsaacLabG1MobileDriver
 
         return IsaacLabG1MobileDriver(cfg)
     if cfg.backend == "isaaclab":
-        from inspect_robots_unitree_g1.walking._isaaclab import IsaacLabGo1Driver
+        from inspect_robots_unitree_g1.walking._isaaclab import IsaacLabVelocityDriver
 
-        return IsaacLabGo1Driver(cfg)
+        return IsaacLabVelocityDriver(cfg)
     if isinstance(cfg, G1MobileConfig):
         from inspect_robots_unitree_g1.walking.g1 import build_g1_mobile_sdk_driver
 
@@ -205,67 +198,4 @@ def default_driver_factory(cfg: LeggedConfig) -> Go1Driver:  # pragma: no cover 
         from inspect_robots_unitree_g1.walking.g1 import build_g1_sdk_driver
 
         return build_g1_sdk_driver(cfg)
-    if isinstance(cfg, Go1Config):
-        return _sdk_driver(cfg)
     raise TypeError(f"no sdk backend for {type(cfg).__name__}")
-
-
-def _sdk_driver(cfg: Go1Config) -> Go1Driver:  # pragma: no cover - hardware
-    """Open the legacy high-level UDP link (unitree_legged_sdk v3.8 robot_interface).
-
-    Not yet verified on a physical Go1. Mode 2 is walking with velocity
-    commands and mode 1 is forced stand, per the SDK's example_walk.py.
-    Camera frames come from the Go1's head camera service, which this
-    backend does not wrap yet; inject ``camera_reader`` on the embodiment.
-    """
-    try:
-        import robot_interface as sdk
-    except ModuleNotFoundError as exc:
-        raise ModuleNotFoundError(ROBOT_INTERFACE_INSTALL, name=exc.name) from exc
-
-    highlevel = 0xEE
-    udp = sdk.UDP(highlevel, cfg.local_port, cfg.robot_ip, cfg.robot_port)
-    cmd = sdk.HighCmd()
-    state = sdk.HighState()
-    udp.InitCmdData(cmd)
-
-    class _SdkDriver:
-        def _send(self, mode: int, forward: float, left: float, turn: float) -> None:
-            udp.Recv()
-            udp.GetRecv(state)
-            cmd.mode = mode
-            cmd.gaitType = 1 if mode == 2 else 0
-            cmd.velocity = [float(forward), float(left)]
-            cmd.yawSpeed = float(turn)
-            cmd.bodyHeight = 0.0
-            cmd.euler = [0.0, 0.0, 0.0]
-            udp.SetSend(cmd)
-            udp.Send()
-
-        def send_velocity(self, forward: float, left: float, turn: float) -> None:
-            self._send(2, forward, left, turn)
-
-        def stand(self) -> None:
-            self._send(1, 0.0, 0.0, 0.0)
-
-        def read_state(self) -> Go1State:
-            udp.Recv()
-            udp.GetRecv(state)
-            yaw = float(state.imu.rpy[2])
-            return Go1State(
-                pose=np.asarray((state.position[0], state.position[1], yaw), dtype=np.float64),
-                velocity=np.asarray(
-                    (state.velocity[0], state.velocity[1], state.yawSpeed), dtype=np.float64
-                ),
-                rpy=np.asarray(state.imu.rpy, dtype=np.float64),
-            )
-
-        def read_frame(self) -> npt.NDArray[np.uint8]:
-            raise RuntimeError(
-                "the sdk backend has no built-in camera; inject camera_reader on Go1Embodiment"
-            )
-
-        def disconnect(self) -> None:
-            self.stand()
-
-    return _SdkDriver()

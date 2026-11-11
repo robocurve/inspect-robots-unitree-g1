@@ -22,19 +22,19 @@ from inspect_robots.types import Action, ActionChunk, Observation
 from inspect_robots_unitree_g1.walking.config import (
     DIM_LABELS,
     G1Config,
-    Go1Config,
+    LeggedConfig,
     action_box,
     observation_space,
 )
-from inspect_robots_unitree_g1.walking.driver import KinematicGo1Driver
-from inspect_robots_unitree_g1.walking.embodiment import G1Embodiment, Go1Embodiment
+from inspect_robots_unitree_g1.walking.driver import KinematicLeggedDriver
+from inspect_robots_unitree_g1.walking.embodiment import G1Embodiment
 from inspect_robots_unitree_g1.walking.g1 import G1LocoDriver
 from walking_fakes import FakeAtexit, FakeClock, FakeSignal, ManualThread, Rig
 
 # ---------------------------------------------------------------------- config
 
 
-def test_g1_defaults_are_gentler_than_the_go1() -> None:
+def test_g1_defaults_are_gentler_than_the_shared_base() -> None:
     cfg = G1Config()
     np.testing.assert_allclose(cfg.high, (0.03, 0.02, 0.05))
     np.testing.assert_allclose(cfg.low, (-0.02, -0.02, -0.05))
@@ -42,7 +42,6 @@ def test_g1_defaults_are_gentler_than_the_go1() -> None:
     assert cfg.camera_name == "head_cam"
     assert cfg.isaac_task == "Isaac-Velocity-Flat-G1-Play-v0"
     assert G1Config.ISAAC_CAMERA_LINK == "torso_link"
-    assert Go1Config.ISAAC_CAMERA_LINK == "trunk"
 
 
 def test_g1_from_kwargs_knows_its_own_fields_only() -> None:
@@ -99,10 +98,8 @@ def test_g1_entry_point_and_flat_kwargs() -> None:
 
 
 def test_wrong_config_type_rejected() -> None:
-    with pytest.raises(TypeError, match="G1Embodiment needs a G1Config; got Go1Config"):
-        G1Embodiment(Go1Config())
-    with pytest.raises(TypeError, match="Go1Embodiment needs a Go1Config; got G1Config"):
-        Go1Embodiment(G1Config())
+    with pytest.raises(TypeError, match="G1Embodiment needs a G1Config; got LeggedConfig"):
+        G1Embodiment(LeggedConfig())
 
 
 def test_g1_ready_prompt_names_walking_mode() -> None:
@@ -263,7 +260,7 @@ class WalkForward:
 def test_eval_walks_the_kinematic_g1_forward(tmp_path: Path) -> None:
     cfg = G1Config(backend="kinematic", unattended=True, camera_height=48, camera_width=64)
     clock = FakeClock()
-    driver = KinematicGo1Driver(cfg, clock=clock, response_time_s=0.0)
+    driver = KinematicLeggedDriver(cfg, clock=clock, response_time_s=0.0)
     emb: G1Embodiment
 
     def sleep_while_streaming(duration: float) -> None:

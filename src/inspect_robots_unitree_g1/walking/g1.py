@@ -28,6 +28,8 @@ from typing import Any, Protocol
 import numpy as np
 import numpy.typing as npt
 
+from inspect_robots_unitree_g1 import packing
+from inspect_robots_unitree_g1._unitree import _load_unitree
 from inspect_robots_unitree_g1.walking.arm_kinematics import (
     G1_ARMS,
     ArmChain,
@@ -36,15 +38,11 @@ from inspect_robots_unitree_g1.walking.arm_kinematics import (
     with_tool_offset,
 )
 from inspect_robots_unitree_g1.walking.config import G1Config, G1MobileConfig
-from inspect_robots_unitree_g1.walking.driver import Go1Driver, Go1State
+from inspect_robots_unitree_g1.walking.driver import LeggedDriver, LeggedState
 
 Vec = npt.NDArray[np.float64]
 CameraReader = Callable[[], npt.NDArray[np.uint8]]
 
-UNITREE_SDK2_INSTALL = (
-    'pip install "unitree_sdk2py @ git+https://github.com/unitreerobotics/unitree_sdk2_python". '
-    "Run on the G1's PC2 or a Linux host wired to the robot's 192.168.123.0/24 network"
-)
 
 #: FSM ids in which the robot is limp, from unitree_sdk2py LocoClient:
 #: ZeroTorque() sets 0 and Damp() sets 1.
@@ -68,7 +66,7 @@ def _wrap(angle: float) -> float:
 
 
 class G1LocoDriver:
-    """Go1Driver-compatible backend for the G1's locomotion service.
+    """LeggedDriver-compatible backend for the G1's locomotion service.
 
     Message callbacks (``on_lowstate``, ``on_odom``) run on DDS threads; every
     read and write of shared state holds one lock.
@@ -136,7 +134,7 @@ class G1LocoDriver:
         with self._lock:
             self._odom = (self._clock(), pose, velocity)
 
-    # ------------------------------------------------------------------ Go1Driver
+    # ------------------------------------------------------------------ LeggedDriver
 
     def send_velocity(self, forward: float, left: float, turn: float) -> None:
         """Command a body velocity that lapses after ``velocity_hold_s`` on the robot."""
@@ -153,7 +151,7 @@ class G1LocoDriver:
         """Command zero velocity. The robot keeps balancing in place."""
         self.send_velocity(0.0, 0.0, 0.0)
 
-    def read_state(self) -> Go1State:
+    def read_state(self) -> LeggedState:
         """Odometry when fresh, otherwise dead reckoning on the IMU yaw."""
         with self._lock:
             if self._rpy is None:
@@ -162,8 +160,8 @@ class G1LocoDriver:
             rpy = self._rpy.copy()
             odom = self._odom
             if odom is not None and self._clock() - odom[0] <= self._cfg.odom_stale_s:
-                return Go1State(pose=odom[1].copy(), velocity=odom[2].copy(), rpy=rpy)
-            return Go1State(pose=self._dead_pose.copy(), velocity=self._command.copy(), rpy=rpy)
+                return LeggedState(pose=odom[1].copy(), velocity=odom[2].copy(), rpy=rpy)
+            return LeggedState(pose=self._dead_pose.copy(), velocity=self._command.copy(), rpy=rpy)
 
     def read_frame(self) -> npt.NDArray[np.uint8]:
         """Return a head camera frame."""
@@ -234,13 +232,15 @@ class GripperIO(Protocol):
 
 
 def grip_to_dex1_stroke(grip: npt.ArrayLike, stroke: float) -> Vec:
-    """Grip 0 (open) to 1 (closed) to Dex1 stroke (0 rad closed, ``stroke`` open)."""
-    return (1.0 - np.clip(np.asarray(grip, dtype=np.float64), 0.0, 1.0)) * stroke
+    """Grip 0 (open) to 1 (closed) to Dex1 stroke, through g1_arms' open-positive mapping."""
+    grips = np.asarray(grip, dtype=np.float64).reshape(-1)
+    return np.asarray([packing.dex1_scalar_to_stroke(1.0 - g, stroke) for g in grips])
 
 
 def dex1_stroke_to_grip(value: npt.ArrayLike, stroke: float) -> Vec:
     """Dex1 stroke back to grip 0 (open) to 1 (closed)."""
-    return np.clip(1.0 - np.asarray(value, dtype=np.float64) / stroke, 0.0, 1.0)
+    strokes = np.asarray(value, dtype=np.float64).reshape(-1)
+    return np.asarray([1.0 - packing.dex1_stroke_to_scalar(v, stroke) for v in strokes])
 
 
 class G1MobileSdkDriver(G1LocoDriver):
@@ -376,18 +376,16 @@ class G1MobileSdkDriver(G1LocoDriver):
 _DDS_INITIALIZED = False
 
 
-def build_g1_sdk_driver(cfg: G1Config) -> Go1Driver:  # pragma: no cover - hardware
+def build_g1_sdk_driver(cfg: G1Config) -> LeggedDriver:  # pragma: no cover - hardware
     """Open DDS, the locomotion client, state subscribers and the head camera."""
     global _DDS_INITIALIZED
     import time
 
-    try:
-        from unitree_sdk2py.core.channel import ChannelFactoryInitialize, ChannelSubscriber
-        from unitree_sdk2py.g1.loco.g1_loco_client import LocoClient
-        from unitree_sdk2py.idl.unitree_go.msg.dds_ import SportModeState_
-        from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowState_
-    except ModuleNotFoundError as exc:
-        raise ModuleNotFoundError(f"unitree_sdk2py is missing. {UNITREE_SDK2_INSTALL}") from exc
+    _load_unitree()
+    from unitree_sdk2py.core.channel import ChannelFactoryInitialize, ChannelSubscriber
+    from unitree_sdk2py.g1.loco.g1_loco_client import LocoClient
+    from unitree_sdk2py.idl.unitree_go.msg.dds_ import SportModeState_
+    from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowState_
 
     if not _DDS_INITIALIZED:
         ChannelFactoryInitialize(0, cfg.network_interface)
@@ -424,24 +422,22 @@ def build_g1_sdk_driver(cfg: G1Config) -> Go1Driver:  # pragma: no cover - hardw
     return driver
 
 
-def build_g1_mobile_sdk_driver(cfg: G1MobileConfig) -> Go1Driver:  # pragma: no cover - hardware
+def build_g1_mobile_sdk_driver(cfg: G1MobileConfig) -> LeggedDriver:  # pragma: no cover - hardware
     """Open everything ``build_g1_sdk_driver`` opens, plus the rt/arm_sdk publisher."""
     global _DDS_INITIALIZED
     import time
 
-    try:
-        from unitree_sdk2py.core.channel import (
-            ChannelFactoryInitialize,
-            ChannelPublisher,
-            ChannelSubscriber,
-        )
-        from unitree_sdk2py.g1.loco.g1_loco_client import LocoClient
-        from unitree_sdk2py.idl.default import unitree_hg_msg_dds__LowCmd_
-        from unitree_sdk2py.idl.unitree_go.msg.dds_ import SportModeState_
-        from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowCmd_, LowState_
-        from unitree_sdk2py.utils.crc import CRC
-    except ModuleNotFoundError as exc:
-        raise ModuleNotFoundError(f"unitree_sdk2py is missing. {UNITREE_SDK2_INSTALL}") from exc
+    _load_unitree()
+    from unitree_sdk2py.core.channel import (
+        ChannelFactoryInitialize,
+        ChannelPublisher,
+        ChannelSubscriber,
+    )
+    from unitree_sdk2py.g1.loco.g1_loco_client import LocoClient
+    from unitree_sdk2py.idl.default import unitree_hg_msg_dds__LowCmd_
+    from unitree_sdk2py.idl.unitree_go.msg.dds_ import SportModeState_
+    from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowCmd_, LowState_
+    from unitree_sdk2py.utils.crc import CRC
 
     if not _DDS_INITIALIZED:
         ChannelFactoryInitialize(0, cfg.network_interface)
@@ -551,7 +547,9 @@ def _dex1_grippers(
 
 
 def _zmq_jpeg_reader(cfg: G1Config) -> CameraReader:  # pragma: no cover - live camera
-    """Read the head camera's JPEG stream, the same transport as ``g1_arms``."""
+    """Read the head camera's JPEG stream, the same transport and decoder as ``g1_arms``."""
+    from inspect_robots_unitree_g1.embodiment import decode_jpeg_frame
+
     socket: Any = None
 
     def reader() -> npt.NDArray[np.uint8]:
@@ -571,11 +569,7 @@ def _zmq_jpeg_reader(cfg: G1Config) -> CameraReader:  # pragma: no cover - live 
             socket.setsockopt(zmq.CONFLATE, 1)
             socket.setsockopt(zmq.RCVTIMEO, round(cfg.cam_timeout_s * 1000))
             socket.connect(cfg.cam_server_address)
-        payload = socket.recv()
-        bgr = cv2.imdecode(np.frombuffer(payload, dtype=np.uint8), cv2.IMREAD_COLOR)
-        if bgr is None:
-            raise RuntimeError("G1 head camera returned an invalid JPEG frame")
-        frame = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+        frame = decode_jpeg_frame(socket.recv, cv2)
         if frame.shape[:2] != (cfg.camera_height, cfg.camera_width):
             frame = cv2.resize(frame, (cfg.camera_width, cfg.camera_height))
         return np.asarray(frame, dtype=np.uint8)

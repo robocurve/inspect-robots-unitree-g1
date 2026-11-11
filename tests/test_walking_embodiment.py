@@ -8,9 +8,9 @@ import pytest
 from inspect_robots.scene import Scene
 from inspect_robots.types import Action
 
-from inspect_robots_unitree_g1.walking.config import Go1Config
-from inspect_robots_unitree_g1.walking.driver import Go1State
-from inspect_robots_unitree_g1.walking.embodiment import Go1Embodiment
+from inspect_robots_unitree_g1.walking.config import LeggedConfig
+from inspect_robots_unitree_g1.walking.driver import LeggedState
+from inspect_robots_unitree_g1.walking.embodiment import LeggedEmbodiment
 from walking_fakes import FakeDriver, Rig
 
 
@@ -38,7 +38,7 @@ def test_reset_connects_stands_and_zeroes_odometry(rig: Rig) -> None:
 
 
 def test_reset_prompts_operator_when_attended() -> None:
-    rig = Rig(Go1Config())
+    rig = Rig(LeggedConfig())
     rig.reset()
     assert rig.prompts and "Clear the area" in rig.prompts[0]
 
@@ -135,7 +135,7 @@ def test_geofence_ends_trial_and_stands(rig: Rig) -> None:
 
 
 def test_geofence_can_be_disabled() -> None:
-    rig = Rig(Go1Config(unattended=True, geofence_m=None))
+    rig = Rig(LeggedConfig(unattended=True, geofence_m=None))
     rig.reset()
     rig.driver.pose = rig.driver.pose + np.asarray((50.0, 0.0, 0.0))
     assert rig.emb.step(Action(data=np.zeros(3))).terminated is False
@@ -143,7 +143,7 @@ def test_geofence_can_be_disabled() -> None:
 
 @pytest.mark.parametrize(("answer", "reason"), [("y", "success"), ("n", "failure")])
 def test_operator_end_scores_and_stands(answer: str, reason: str) -> None:
-    rig = Rig(Go1Config(), poll_end=lambda: True)
+    rig = Rig(LeggedConfig(), poll_end=lambda: True)
     rig.reset()
     rig.answer = answer
     result = rig.emb.step(Action(data=np.asarray((0.05, 0.0, 0.0))))
@@ -169,8 +169,8 @@ def test_invalid_backend_state_is_refused(rig: Rig, field: str) -> None:
     bad = {"pose": rig.driver.pose, "velocity": rig.driver.velocity, "rpy": rig.driver.rpy}
     bad[field] = np.asarray((0.0, math.inf, 0.0))
 
-    def read_state() -> Go1State:
-        return Go1State(**bad)
+    def read_state() -> LeggedState:
+        return LeggedState(**bad)
 
     rig.driver.read_state = read_state  # type: ignore[method-assign]
     with pytest.raises(ValueError, match=f"invalid {field}"):
@@ -354,8 +354,8 @@ def test_register_is_idempotent(rig: Rig) -> None:
 
 def test_default_scene_instruction_flows_through() -> None:
     driver = FakeDriver()
-    emb = Go1Embodiment(
-        Go1Config(unattended=True),
+    emb = LeggedEmbodiment(
+        LeggedConfig(unattended=True),
         driver_factory=lambda _: driver,
         thread_factory=lambda target: None,
         clock=lambda: 0.0,

@@ -12,9 +12,9 @@ from inspect_robots.scorer import episode_length
 from inspect_robots.task import Task
 from inspect_robots.types import Action, ActionChunk, Observation
 
-from inspect_robots_unitree_g1.walking.config import Go1Config, action_box, observation_space
-from inspect_robots_unitree_g1.walking.driver import KinematicGo1Driver
-from inspect_robots_unitree_g1.walking.embodiment import Go1Embodiment
+from inspect_robots_unitree_g1.walking.config import LeggedConfig, action_box, observation_space
+from inspect_robots_unitree_g1.walking.driver import KinematicLeggedDriver
+from inspect_robots_unitree_g1.walking.embodiment import LeggedEmbodiment
 from walking_fakes import FakeAtexit, FakeClock, FakeSignal, ManualThread
 
 
@@ -37,17 +37,17 @@ class WalkForward:
 
 
 def test_eval_walks_the_kinematic_robot_forward(tmp_path: Path) -> None:
-    cfg = Go1Config(unattended=True, camera_height=48, camera_width=64)
+    cfg = LeggedConfig(unattended=True, camera_height=48, camera_width=64)
     clock = FakeClock()
-    driver = KinematicGo1Driver(cfg, clock=clock, response_time_s=0.0)
-    emb: Go1Embodiment
+    driver = KinematicLeggedDriver(cfg, clock=clock, response_time_s=0.0)
+    emb: LeggedEmbodiment
 
     def sleep_while_streaming(duration: float) -> None:
         # Stand-in for the streamer thread: one send per control period.
         emb.stream_once()
         clock.sleep(duration)
 
-    emb = Go1Embodiment(
+    emb = LeggedEmbodiment(
         cfg,
         driver_factory=lambda _: driver,
         clock=clock,
