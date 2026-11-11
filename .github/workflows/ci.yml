@@ -83,9 +83,12 @@ jobs:
         run: |
           .venv/bin/python - <<'PY'
           import importlib.util
-          for mod in ("zmq", "msgpack", "msgpack_numpy", "cv2", "unitree_sdk2py", "torch"):
+          for mod in ("zmq", "msgpack", "msgpack_numpy", "cv2", "unitree_sdk2py", "torch", "isaaclab", "mujoco"):
               assert importlib.util.find_spec(mod) is None, f"{mod} unexpectedly installed"
           import inspect_robots_unitree_g1
+          import inspect_robots_unitree_g1.walking
+          import inspect_robots_unitree_g1.walking.mobile
+          import inspect_robots_unitree_g1.walking.preflight
           print(
               "inspect_robots_unitree_g1",
               inspect_robots_unitree_g1.__version__,

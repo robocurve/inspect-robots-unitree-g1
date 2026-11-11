@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "inspect-robots-unitree-g1"
 dynamic = ["version", "readme"]
-description = "Inspect Robots adapters for Unitree G1 arms and Isaac-GR00T policy servers."
+description = "Inspect Robots adapters for Unitree G1: arms with Isaac-GR00T policy servers, and walking with both arms for LLM agents."
 requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -20,7 +20,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "inspect-robots>=0.12",
+    "inspect-robots>=0.59",
     "numpy>=1.24",
 ]
 
@@ -41,12 +41,15 @@ Collection = "https://github.com/robocurve/worldevals"
 
 [project.entry-points."inspect_robots.embodiments"]
 g1_arms = "inspect_robots_unitree_g1.embodiment:G1Embodiment"
+g1_base = "inspect_robots_unitree_g1.walking.embodiment:G1Embodiment"
+g1_mobile = "inspect_robots_unitree_g1.walking.mobile:G1MobileEmbodiment"
 
 [project.entry-points."inspect_robots.policies"]
 gr00t = "inspect_robots_unitree_g1.policy:Gr00tPolicy"
 
 [project.scripts]
 inspect-robots-unitree-g1-preflight = "inspect_robots_unitree_g1.preflight:main"
+inspect-robots-unitree-g1-robot-check = "inspect_robots_unitree_g1.walking.preflight:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/inspect_robots_unitree_g1"]
@@ -79,7 +82,7 @@ strict = true
 files = ["src/inspect_robots_unitree_g1"]
 
 [[tool.mypy.overrides]]
-module = ["unitree_sdk2py.*", "zmq.*", "msgpack.*", "msgpack_numpy.*", "cv2.*"]
+module = ["unitree_sdk2py.*", "zmq.*", "msgpack.*", "msgpack_numpy.*", "cv2.*", "robot_interface", "robot_interface.*", "isaaclab.*", "isaaclab_tasks.*", "torch", "torch.*", "gymnasium", "gymnasium.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
