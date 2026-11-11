@@ -322,34 +322,34 @@ def test_reconnect_after_close_reregisters_backstops(rig: Rig) -> None:
     assert rig.atexit.registered == [rig.emb.close, rig.emb.close]
 
 
-def test_sigterm_closes_then_chains_previous_handler() -> None:
+def test_sigterm_chains_a_previous_python_handler() -> None:
     seen: list[int] = []
     rig = Rig()
     rig.signal.previous = lambda signum, frame: seen.append(signum)
     rig.reset()
-    handler = rig.signal.handlers[0][1]
-    handler(15, None)
-    assert rig.driver.events[-1] == "disconnect"
+    rig.signal.handlers[0][1](15, None)
     assert seen == [15]
 
 
-def test_sigterm_with_the_default_handler_still_terminates() -> None:
+def test_sigterm_with_the_default_handler_exits_without_tearing_down_in_the_handler() -> None:
     rig = Rig()
     rig.signal.previous = rig.signal.SIG_DFL
     rig.reset()
-    rig.signal.handlers[0][1](15, None)
+    with pytest.raises(SystemExit) as exited:
+        rig.signal.handlers[0][1](15, None)
+    assert exited.value.code == 143
+    assert "disconnect" not in rig.driver.events  # no teardown inside the handler
+    # The exit then runs the atexit backstop, which stands and disconnects.
+    rig.atexit.registered[-1]()
     assert rig.driver.events[-1] == "disconnect"
-    assert rig.signal.raised == [15]  # default action restored and re-raised
-    assert rig.signal.handlers[-1] == (15, rig.signal.SIG_DFL)
 
 
-def test_sigterm_with_an_ignoring_handler_only_cleans_up() -> None:
+def test_sigterm_with_an_ignoring_handler_does_nothing() -> None:
     rig = Rig()
     rig.signal.previous = rig.signal.SIG_IGN
     rig.reset()
     rig.signal.handlers[0][1](15, None)
-    assert rig.driver.events[-1] == "disconnect"
-    assert rig.signal.raised == []
+    assert "disconnect" not in rig.driver.events
 
 
 def test_unregister_is_idempotent(rig: Rig) -> None:

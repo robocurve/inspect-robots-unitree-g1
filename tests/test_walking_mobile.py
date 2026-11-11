@@ -476,3 +476,15 @@ def test_takeover_holds_the_measured_pose_and_reseeds_on_every_reset() -> None:
     driver.on_lowstate(lowstate_with_arms(second))
     assert driver.engage_hands() is True  # already engaged: reseed and go
     np.testing.assert_allclose(publisher.sent[-1][0], second)
+
+
+def test_non_finite_arm_joints_are_refused_before_any_command() -> None:
+    cfg = G1MobileConfig()
+    publisher = FakeArmPublisher()
+    driver = G1MobileSdkDriver(cfg, loco=FakeLoco(), clock=FakeClock(), arm_publisher=publisher)
+    q = np.concatenate([G1_ARMS[0].nominal, G1_ARMS[1].nominal])
+    q[3] = np.nan
+    driver.on_lowstate(lowstate_with_arms(q))
+    with pytest.raises(ValueError, match="invalid arm joint angles"):
+        driver.engage_hands()
+    assert publisher.sent == []

@@ -431,16 +431,19 @@ class LeggedEmbodiment:
         self._previous_sigterm = None
 
     def _handle_sigterm(self, signum: int, frame: FrameType | None) -> None:
+        """Turn SIGTERM into a normal exit; do not tear down inside the handler.
+
+        The handler may interrupt code that holds this embodiment's lock, so
+        closing here could deadlock. Raising ``SystemExit`` unwinds that code
+        (releasing the lock); the step's own failure path and the ``atexit``
+        backstop then close and stand the robot. A previous Python handler is
+        run instead; an ignored SIGTERM stays ignored.
+        """
         previous = self._previous_sigterm
-        try:
-            self.close()
-        finally:
-            if callable(previous):
-                previous(signum, frame)
-            elif previous is not self._signal.SIG_IGN:
-                # Default (or a handler installed outside Python): terminate as usual.
-                self._signal.signal(signum, self._signal.SIG_DFL)
-                self._signal.raise_signal(signum)
+        if callable(previous):
+            previous(signum, frame)
+        elif previous is not self._signal.SIG_IGN:
+            raise SystemExit(128 + signum)
 
     def _require_driver(self) -> LeggedDriver:
         if self._driver is None:

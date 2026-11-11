@@ -306,7 +306,10 @@ class G1MobileSdkDriver(G1LocoDriver):
         with self._lock:
             if self._arm_q is None:
                 raise RuntimeError("rt/lowstate has not produced arm joint angles yet")
-            return self._arm_q.copy()
+            q = self._arm_q.copy()
+        if q.shape != (14,) or not np.all(np.isfinite(q)):
+            raise ValueError(f"rt/lowstate returned invalid arm joint angles: {q!r}")
+        return q
 
     def read_hands(self) -> tuple[Vec, Vec]:
         """Palm positions from the measured arm joints, and measured grips (0 without grippers)."""
