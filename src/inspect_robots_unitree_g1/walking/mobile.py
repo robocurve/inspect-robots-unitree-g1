@@ -177,6 +177,9 @@ class G1MobileEmbodiment(G1Embodiment):
         self._hands_active = False
         #: The arms may hold arm-sdk weight (takeover started) until close releases them.
         self._arms_owned = False
+        #: Held across a streamer send, and while turning the streamer off the arms, so
+        #: no in-flight send can overlap a takeover or a release.
+        self._send_lock = threading.Lock()
 
     @property
     def _mobile_cfg(self) -> G1MobileConfig:
@@ -196,9 +199,10 @@ class G1MobileEmbodiment(G1Embodiment):
     def _reset_extra(self, driver: LeggedDriver) -> None:
         """Take the arms over holding their measured pose, then glide the palms home."""
         hands = self._hands(driver)
-        with self._lock:
-            # The streamer stays off the arms until the takeover completes, but from
-            # the first takeover tick close() must hand the arms back.
+        with self._send_lock, self._lock:
+            # The streamer stays off the arms until the takeover completes (and any
+            # send already in flight finishes first), but from the first takeover
+            # tick close() must hand the arms back.
             self._hands_active = False
             self._arms_owned = True
         cfg = self._mobile_cfg
@@ -240,12 +244,13 @@ class G1MobileEmbodiment(G1Embodiment):
     def _stream_extra(self, driver: LeggedDriver) -> None:
         """Send the current targets and adopt the reachable palms as targets."""
         hands = self._hands(driver)
-        with self._lock:
-            if not self._hands_active:
-                return
-            targets = self._hand_targets.copy()
-            grips = self._grip_targets.copy()
-        reached = np.asarray(hands.send_hands(targets, grips), dtype=np.float64)
+        with self._send_lock:
+            with self._lock:
+                if not self._hands_active:
+                    return
+                targets = self._hand_targets.copy()
+                grips = self._grip_targets.copy()
+            reached = np.asarray(hands.send_hands(targets, grips), dtype=np.float64)
         if reached.shape != (2, 3) or not np.all(np.isfinite(reached)):
             raise ValueError(f"backend returned invalid reachable palms: {reached!r}")
         with self._lock:
@@ -266,7 +271,7 @@ class G1MobileEmbodiment(G1Embodiment):
 
     def _release_extra(self, driver: LeggedDriver) -> None:
         """Hand the arms back to the robot's controller, ticking at stream rate."""
-        with self._lock:
+        with self._send_lock, self._lock:
             owned = self._arms_owned or self._hands_active
             self._hands_active = False
             self._arms_owned = False

@@ -499,3 +499,52 @@ def test_stale_arm_joints_are_refused() -> None:
     clock.now += 1.0
     with pytest.raises(RuntimeError, match="rt/lowstate is"):
         driver.read_hands()
+
+
+def test_streaming_arm_commands_needs_fresh_lowstate() -> None:
+    clock = FakeClock()
+    publisher = FakeArmPublisher()
+    driver = G1MobileSdkDriver(
+        G1MobileConfig(), loco=FakeLoco(), clock=clock, arm_publisher=publisher
+    )
+    q = np.concatenate([G1_ARMS[0].nominal, G1_ARMS[1].nominal])
+    driver.on_lowstate(lowstate_with_arms(q))
+    while not driver.engage_hands():
+        pass
+    sent = len(publisher.sent)
+    clock.now += 1.0  # rt/lowstate stopped; the streamer is still sending
+    with pytest.raises(RuntimeError, match="rt/lowstate is"):
+        driver.send_hands(HOME_HANDS, np.zeros(2))
+    assert len(publisher.sent) == sent  # nothing published on stale feedback
+
+
+class RecordingLock:
+    def __init__(self) -> None:
+        self.held = False
+        self.entries = 0
+
+    def __enter__(self) -> None:
+        self.held = True
+        self.entries += 1
+
+    def __exit__(self, *exc: object) -> None:
+        self.held = False
+
+
+def test_streamer_sends_and_takeovers_are_serialized() -> None:
+    rig, driver = mobile_rig()
+    lock = RecordingLock()
+    rig.emb._send_lock = lock  # type: ignore[assignment]
+    held_during_send: list[bool] = []
+    original = driver.send_hands
+
+    def send(targets: Any, grips: Any) -> Any:
+        held_during_send.append(lock.held)
+        return original(targets, grips)
+
+    driver.send_hands = send  # type: ignore[method-assign]
+    rig.reset()  # the takeover turns the streamer off under the lock
+    entries_after_reset = lock.entries
+    assert entries_after_reset >= 1
+    rig.emb.stream_once()
+    assert held_during_send and all(held_during_send)

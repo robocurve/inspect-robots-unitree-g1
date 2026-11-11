@@ -376,6 +376,8 @@ class G1MobileSdkDriver(G1LocoDriver):
 
     def send_hands(self, targets: Vec, grips: Vec) -> Vec:
         """Solve, rate-limit and publish; return reachable palms. Holds until engaged."""
+        # Every send needs fresh rt/lowstate: stale feedback stops the streamer here.
+        self._measured_arm_q()
         if self._q_cmd is None or self._weight < 1.0:
             self.engage_hands()
             assert self._q_cmd is not None
@@ -437,12 +439,13 @@ def build_g1_sdk_driver(cfg: G1Config) -> LeggedDriver:  # pragma: no cover - ha
     loco.Init()
     lowstate = ChannelSubscriber("rt/lowstate", LowState_)
     odom = ChannelSubscriber(cfg.odom_topic, SportModeState_)
+    camera = _ZmqJpegReader(cfg)
     driver = G1LocoDriver(
         cfg,
         loco=loco,
         clock=time.monotonic,
-        camera_reader=_zmq_jpeg_reader(cfg),
-        closers=(lowstate.Close, odom.Close),
+        camera_reader=camera,
+        closers=(lowstate.Close, odom.Close, camera.close),
     )
     lowstate.Init(driver.on_lowstate, 10)
     odom.Init(driver.on_odom, 10)
@@ -460,6 +463,7 @@ def build_g1_sdk_driver(cfg: G1Config) -> LeggedDriver:  # pragma: no cover - ha
     except BaseException:
         lowstate.Close()
         odom.Close()
+        camera.close()
         raise
     return driver
 
@@ -508,13 +512,14 @@ def build_g1_mobile_sdk_driver(cfg: G1MobileConfig) -> LeggedDriver:  # pragma: 
     lowstate = ChannelSubscriber("rt/lowstate", LowState_)
     odom = ChannelSubscriber(cfg.odom_topic, SportModeState_)
     grippers, gripper_closers = _dex1_grippers(cfg) if cfg.hands == "dex1" else (None, ())
+    camera = _ZmqJpegReader(cfg)
     driver = G1MobileSdkDriver(
         cfg,
         loco=loco,
         clock=time.monotonic,
         arm_publisher=_ArmSdk(),
-        camera_reader=_zmq_jpeg_reader(cfg),
-        closers=(lowstate.Close, odom.Close, *gripper_closers),
+        camera_reader=camera,
+        closers=(lowstate.Close, odom.Close, *gripper_closers, camera.close),
         grippers=grippers,
     )
     lowstate.Init(driver.on_lowstate, 10)
@@ -536,6 +541,7 @@ def build_g1_mobile_sdk_driver(cfg: G1MobileConfig) -> LeggedDriver:  # pragma: 
         odom.Close()
         for close in gripper_closers:
             close()
+        camera.close()
         raise
     return driver
 
@@ -588,14 +594,21 @@ def _dex1_grippers(
     return _Dex1(), tuple(subscriber.Close for subscriber in subscribers)
 
 
-def _zmq_jpeg_reader(cfg: G1Config) -> CameraReader:  # pragma: no cover - live camera
-    """Read the head camera's JPEG stream, the same transport and decoder as ``g1_arms``."""
-    from inspect_robots_unitree_g1.embodiment import decode_jpeg_frame
+class _ZmqJpegReader:  # pragma: no cover - live camera
+    """Read the head camera's JPEG stream, the same transport and decoder as ``g1_arms``.
 
-    socket: Any = None
+    The SUB socket opens on the first frame; ``close`` releases it and is one of
+    the driver's closers, so normal teardown and failed connections both close it.
+    """
 
-    def reader() -> npt.NDArray[np.uint8]:
-        nonlocal socket
+    def __init__(self, cfg: G1Config) -> None:
+        self._cfg = cfg
+        self._socket: Any = None
+
+    def __call__(self) -> npt.NDArray[np.uint8]:
+        from inspect_robots_unitree_g1.embodiment import decode_jpeg_frame
+
+        cfg = self._cfg
         try:
             import cv2
             import zmq
@@ -605,15 +618,21 @@ def _zmq_jpeg_reader(cfg: G1Config) -> CameraReader:  # pragma: no cover - live 
                 "pip install pyzmq opencv-python-headless",
                 name=exc.name,
             ) from exc
-        if socket is None:
+        if self._socket is None:
             socket = zmq.Context.instance().socket(zmq.SUB)
             socket.setsockopt(zmq.SUBSCRIBE, b"")
             socket.setsockopt(zmq.CONFLATE, 1)
             socket.setsockopt(zmq.RCVTIMEO, round(cfg.cam_timeout_s * 1000))
+            socket.setsockopt(zmq.LINGER, 0)
             socket.connect(cfg.cam_server_address)
-        frame = decode_jpeg_frame(socket.recv, cv2)
+            self._socket = socket
+        frame = decode_jpeg_frame(self._socket.recv, cv2)
         if frame.shape[:2] != (cfg.camera_height, cfg.camera_width):
             frame = cv2.resize(frame, (cfg.camera_width, cfg.camera_height))
         return np.asarray(frame, dtype=np.uint8)
 
-    return reader
+    def close(self) -> None:
+        """Close the socket if it was opened."""
+        socket, self._socket = self._socket, None
+        if socket is not None:
+            socket.close()

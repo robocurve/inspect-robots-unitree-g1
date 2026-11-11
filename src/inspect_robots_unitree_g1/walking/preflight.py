@@ -252,7 +252,7 @@ def probe_robot(cfg: G1MobileConfig, seconds: float) -> ProbeResult:  # pragma: 
     from inspect_robots_unitree_g1.walking.g1 import (
         ARM_MOTOR_INDICES,
         DEX1_TOPICS,
-        _zmq_jpeg_reader,
+        _ZmqJpegReader,
     )
 
     lock = threading.Lock()
@@ -304,7 +304,11 @@ def probe_robot(cfg: G1MobileConfig, seconds: float) -> ProbeResult:  # pragma: 
         except Exception as exc:  # report, do not crash the preflight
             result.fsm_error = repr(exc)
         try:
-            result.frame_shape = tuple(_zmq_jpeg_reader(cfg)().shape)
+            camera = _ZmqJpegReader(cfg)
+            try:
+                result.frame_shape = tuple(camera().shape)
+            finally:
+                camera.close()
         except Exception as exc:
             result.camera_error = repr(exc)
         time.sleep(seconds)
